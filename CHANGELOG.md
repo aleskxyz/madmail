@@ -1,3 +1,15 @@
+# [0.20.0](https://github.com/themadorg/madmail/compare/v0.19.0...v0.20.0) (2026-03-03)
+
+
+### Bug Fixes
+
+* **auth:** validate username domain before JIT account creation ([044a893](https://github.com/themadorg/madmail/commit/044a893b43577fbe133a71214998bf3b00429b11)), closes [#19](https://github.com/themadorg/madmail/issues/19)
+
+
+### Features
+
+* stealth/camouflage mode — derive all paths from binary name ([5107e7f](https://github.com/themadorg/madmail/commit/5107e7f3195004ee15159fbae0962169de903501))
+
 # [0.19.0](https://github.com/themadorg/madmail/compare/v0.18.0...v0.19.0) (2026-02-21)
 
 
