@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/themadorg/madmail/framework/config"
+	frameworkconfig "github.com/themadorg/madmail/framework/config"
 	maddycli "github.com/themadorg/madmail/internal/cli"
 	"github.com/themadorg/madmail/internal/db"
 	"github.com/urfave/cli/v2"
@@ -45,14 +45,14 @@ Usage example:
 		Action: func(c *cli.Context) error {
 			stateDir := c.String("state-dir")
 			if stateDir == "" {
-				stateDir = config.StateDirectory
+				stateDir = frameworkconfig.StateDirectory
 			}
 			if stateDir == "" {
-				stateDir = "/var/lib/maddy"
+				stateDir = "/var/lib/" + frameworkconfig.BinaryName()
 			}
 
 			// Check the config file for an explicit admin_token
-			confToken := getTokenFromConfig("/etc/maddy/maddy.conf")
+			confToken := getTokenFromConfig(frameworkconfig.ConfigFile())
 			if confToken == "disabled" {
 				return fmt.Errorf("admin API is explicitly disabled in config (admin_token disabled)")
 			}
@@ -104,7 +104,7 @@ func isTerminal(f *os.File) bool {
 // maddy.conf and overriding with DB-stored settings via GORM.
 func buildAdminURL(dbPath string) string {
 	// 1. Read hostname from maddy.conf $(hostname) = ...
-	host := getHostnameFromConfig("/etc/maddy/maddy.conf")
+	host := getHostnameFromConfig(frameworkconfig.ConfigFile())
 	if host == "" {
 		host = "your-server"
 	}

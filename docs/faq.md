@@ -82,7 +82,7 @@ differently).
 maddy does not require MongoDB server for deployment.
 
 maddy has no web interface for queue inspection. However, it can
-easily inspected by looking at files in /var/lib/maddy.
+easily inspected by looking at files in /var/lib/<binary>.
 
 ZoneMTA has a number of features that may make it easier to integrate
 with HTTP-based services. maddy speaks standard email protocols (SMTP,

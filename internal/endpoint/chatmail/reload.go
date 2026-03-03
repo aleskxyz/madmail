@@ -127,7 +127,7 @@ func (e *Endpoint) reloadConfig() error {
 	// Find the config file path
 	configPath := findConfigPath()
 	if configPath == "" {
-		return fmt.Errorf("cannot find maddy.conf: checked /etc/maddy/maddy.conf and state_dir")
+		return fmt.Errorf("cannot find %s.conf: checked %s and state_dir", config.BinaryName(), config.ConfigFile())
 	}
 
 	// Read the current config
@@ -197,11 +197,11 @@ func (e *Endpoint) reloadConfig() error {
 
 	if modified {
 		// Write the modified config to a pending file in the state dir.
-		// The state dir (/var/lib/maddy/) is writable by the maddy user,
-		// while the config dir (/etc/maddy/) is owned by root.
+		// The state dir (/var/lib/<binary>/) is writable by the service user,
+		// while the config dir (/etc/<binary>/) is owned by root.
 		// An ExecStartPre script in the systemd unit copies the pending file
 		// to the actual config location on next startup.
-		pendingPath := filepath.Join(config.StateDirectory, "maddy.conf.pending")
+		pendingPath := filepath.Join(config.StateDirectory, config.BinaryName()+".conf.pending")
 		if err := os.WriteFile(pendingPath, []byte(content), 0640); err != nil {
 			return fmt.Errorf("failed to write pending config to %s: %v", pendingPath, err)
 		}
@@ -214,18 +214,19 @@ func (e *Endpoint) reloadConfig() error {
 	return restartService()
 }
 
-// findConfigPath locates the maddy.conf file.
+// findConfigPath locates the main configuration file.
 func findConfigPath() string {
-	// Check standard locations
+	// Primary candidate: derived from the running binary name.
+	// e.g. for binary "sysmond" (stealth mode) this is "/etc/sysmond/sysmond.conf".
 	candidates := []string{
-		"/etc/maddy/maddy.conf",
+		config.ConfigFile(),
 	}
 
 	// Also check relative to state directory
 	if config.StateDirectory != "" {
 		candidates = append(candidates,
-			config.StateDirectory+"/../maddy.conf",
-			config.StateDirectory+"/maddy.conf",
+			config.StateDirectory+"/../"+config.BinaryName()+".conf",
+			config.StateDirectory+"/"+config.BinaryName()+".conf",
 		)
 	}
 

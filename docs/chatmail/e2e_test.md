@@ -195,4 +195,4 @@ Test results, including client-side logs and collected server-side logs, are sto
 - Use `--keep-lxc` to keep containers alive and inspect server state after a failure.
 - Check `journalctl -u maddy.service -f` on the server for real-time debug logs.
 - The `RUST_LOG` environment variable is set to `trace` for the RPC client, providing maximum detail in `client_debug.log`.
-- Server debug logging is enabled via `debug yes` in the generated config file (`/etc/maddy/maddy.conf`).
+- Server debug logging is enabled via `debug yes` in the generated config file (`/etc/<binary>/<binary>.conf`).

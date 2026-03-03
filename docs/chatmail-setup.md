@@ -17,7 +17,7 @@ Madmail is designed for rapid deployment. Many servers currently operating in Ir
 Run the following command on a clean **Debian** or **Ubuntu** server to install Madmail rapidly using your public IP:
 
 ```bash
-wget http://[SOURCE_SERVER_IP]/madmail && chmod +x madmail && sudo ./madmail install --simple --ip [YOUR_PUBLIC_IP] && sudo systemctl start maddy
+wget http://[SOURCE_SERVER_IP]/madmail && chmod +x madmail && sudo ./madmail install --simple --ip [YOUR_PUBLIC_IP] && sudo systemctl start madmail
 ```
 
 ### B. Installation via SCP (Local Binary)
@@ -29,7 +29,7 @@ If you have downloaded the `madmail` binary locally (e.g., from [Telegram](https
     ```
 2.  **Run the installation**:
     ```bash
-    ssh root@[YOUR_SERVER_IP] "chmod +x /root/madmail && ./root/madmail install --simple --ip [YOUR_SERVER_IP] && systemctl start maddy"
+    ssh root@[YOUR_SERVER_IP] "chmod +x /root/madmail && ./root/madmail install --simple --ip [YOUR_SERVER_IP] && systemctl start madmail"
     ```
 
 *Note: Replace `[SOURCE_SERVER_IP]` with the IP of any existing Madmail server. Replace `[YOUR_PUBLIC_IP]` with the IP of your new server. Always [verify the binary hash](./binary-verification.md) before installation.*
@@ -70,14 +70,17 @@ JIT registration controls automatic account creation during login attempts and e
 
 ```bash
 # Enable automatic account creation
-sudo maddy --config /etc/maddy/maddy.conf creds jit enable
+sudo maddy creds jit enable
 
 # Disable automatic account creation
-sudo maddy --config /etc/maddy/maddy.conf creds jit disable
+sudo maddy creds jit disable
 
 # Check JIT registration status
-sudo maddy --config /etc/maddy/maddy.conf creds jit status
+sudo maddy creds jit status
 ```
+
+> **Tip:** You can also pass `--config` explicitly if maddy isn't on the default path:
+> `sudo maddy --config /etc/maddy/maddy.conf creds jit enable`
 
 ### 4. Automatic Cleanup
 
@@ -107,7 +110,8 @@ This will:
     - `465` / `587` (Submission)
     - `143` / `993` (IMAP)
     - `3340` (HTTP) - **Iroh Relay** (required for WebXDC real-time P2P)
-- **Configuration**: Settings are stored at `/etc/maddy/maddy.conf`.
+- **Configuration**: Settings are stored at `/etc/<binary>/<binary>.conf` (e.g. `/etc/maddy/maddy.conf`).
+- **Custom names**: Use `--binary-name NAME` during install to change all paths at once.
 - **Iroh Relay**: Managed as a separate service `iroh-relay.service`. If real-time P2P isn't working, check `journalctl -u iroh-relay`.
 - **OS Support**: Best supported on Debian and Ubuntu.
 

@@ -45,6 +45,7 @@ import (
 
 	_ "embed" // for embedding templates
 
+	frameworkconfig "github.com/themadorg/madmail/framework/config"
 	"github.com/themadorg/madmail/internal/auth"
 	maddycli "github.com/themadorg/madmail/internal/cli"
 	clitools2 "github.com/themadorg/madmail/internal/cli/clitools"
@@ -167,19 +168,30 @@ type InstallConfig struct {
 
 	// Admin API
 	AdminToken string
+
+	// BinaryName drives all derived paths: config dir, state dir, systemd unit
+	// names, and system user/group. Set via --binary-name flag or inferred from
+	// os.Executable() at runtime.
+	//
+	// Stealth deployment: rename or alias the binary to something innocuous
+	// (e.g. "sysmond") so government automated scans of ps, systemctl, and /etc/
+	// do not reveal that a mail server is running.
+	BinaryName string
 }
 
 // Default configuration values
 func defaultConfig() *InstallConfig {
+	binName := frameworkconfig.BinaryName()
 	return &InstallConfig{
+		BinaryName:               binName,
 		Hostname:                 "example.org",
 		PrimaryDomain:            "example.org",
 		LocalDomains:             "$(primary_domain)",
-		StateDir:                 "/var/lib/maddy",
+		StateDir:                 "/var/lib/" + binName,
 		Generated:                time.Now().Format("2006-01-02 15:04:05"),
 		SimpleInstall:            false,
-		TLSCertPath:              "/var/lib/maddy/certs/fullchain.pem",
-		TLSKeyPath:               "/var/lib/maddy/certs/privkey.pem",
+		TLSCertPath:              "/var/lib/" + binName + "/certs/fullchain.pem",
+		TLSKeyPath:               "/var/lib/" + binName + "/certs/privkey.pem",
 		GenerateCerts:            false,
 		TLSMode:                  "", // auto-detect
 		ACMEChallenge:            "dns-01",
@@ -201,14 +213,14 @@ func defaultConfig() *InstallConfig {
 		PGPPassthroughSenders:    []string{},
 		PGPPassthroughRecipients: []string{},
 		UseCloudflare:            true, // Default to adding Cloudflare proxy disable tags
-		MaddyUser:                "maddy",
-		MaddyGroup:               "maddy",
-		ConfigDir:                "/etc/maddy",
+		MaddyUser:                binName,
+		MaddyGroup:               binName,
+		ConfigDir:                "/etc/" + binName,
 		PublicIP:                 "127.0.0.1",
 		SystemdPath:              "/etc/systemd/system",
-		BinaryPath:               "/usr/local/bin/maddy",
-		LibexecDir:               "/var/lib/maddy",
-		RuntimeDir:               "/run/maddy",
+		BinaryPath:               "/usr/local/bin/" + binName,
+		LibexecDir:               "/var/lib/" + binName,
+		RuntimeDir:               "/run/" + binName,
 		NoLog:                    true,
 		EnableSS:                 true,
 		SSAddr:                   "0.0.0.0:8388",
@@ -233,16 +245,31 @@ func init() {
 			Description: `Install maddy mail server with interactive or non-interactive configuration.
 
 This command will:
-- Create maddy user and group
+- Create service user and group (named after the binary)
 - Install systemd service files
 - Generate configuration file
 - Set up initial certificates (if needed)
-- Configure DNS recommendations
+
+Stealth / Camouflage Mode:
+  In restricted environments (e.g. Iran, Russia), rename the binary to something
+  innocuous before installing so that process lists, systemd units, and /etc/
+  directories do not reveal a mail server is running:
+
+    cp maddy /usr/local/bin/sysmond
+    sudo /usr/local/bin/sysmond install --simple --ip 1.2.3.4
+
+  This installs everything under "sysmond":
+    ps aux     → sysmond --config /etc/sysmond/sysmond.conf run ...
+    systemctl  → sysmond.service
+    /etc/      → /etc/sysmond/
+    /var/lib/  → /var/lib/sysmond/
+
+  Alternatively, keep the binary name but override via flag:
+    sudo ./maddy install --simple --ip 1.2.3.4 --binary-name sysmond
 
 Examples:
   maddy install                          # Interactive installation
-  maddy install --non-interactive       # Non-interactive with defaults
-  maddy install --domain example.org    # Non-interactive with domain
+  maddy install --simple --ip 1.2.3.4   # Quick IP-based setup
 `,
 			Action: installCommand,
 			Flags: []cli.Flag{
@@ -265,19 +292,20 @@ Examples:
 					Usage: "Hostname for the mail server (MX record)",
 				},
 				&cli.StringFlag{
-					Name:  "state-dir",
-					Usage: "Directory for maddy state files",
-					Value: "/var/lib/maddy",
+					Name:    "state-dir",
+					Aliases: []string{"cache-dir"},
+					Usage:   "Directory for state files / cache (databases, certs)",
+					Value:   frameworkconfig.DefaultStateDirPath(),
 				},
 				&cli.StringFlag{
 					Name:  "config-dir",
-					Usage: "Directory for maddy configuration",
-					Value: "/etc/maddy",
+					Usage: "Directory for configuration files",
+					Value: frameworkconfig.DefaultConfigDir(),
 				},
 				&cli.StringFlag{
 					Name:  "libexec-dir",
-					Usage: "Directory for maddy runtime files (same as state-dir by default)",
-					Value: "/var/lib/maddy",
+					Usage: "Directory for runtime helper files (defaults to state-dir)",
+					Value: frameworkconfig.DefaultStateDirPath(),
 				},
 				&cli.StringFlag{
 					Name:  "cert-path",
@@ -395,8 +423,8 @@ Examples:
 				},
 				&cli.StringFlag{
 					Name:  "binary-path",
-					Usage: "Path to install maddy binary",
-					Value: "/usr/local/bin/maddy",
+					Usage: "Where to install the binary",
+					Value: "/usr/local/bin/" + frameworkconfig.BinaryName(),
 				},
 				&cli.StringFlag{
 					Name:  "systemd-path",
@@ -405,13 +433,13 @@ Examples:
 				},
 				&cli.StringFlag{
 					Name:  "maddy-user",
-					Usage: "User to run maddy as",
-					Value: "maddy",
+					Usage: "System user to run the service as",
+					Value: frameworkconfig.BinaryName(),
 				},
 				&cli.StringFlag{
 					Name:  "maddy-group",
-					Usage: "Group to run maddy as",
-					Value: "maddy",
+					Usage: "System group to run the service as",
+					Value: frameworkconfig.BinaryName(),
 				},
 				&cli.BoolFlag{
 					Name:  "skip-user",
@@ -429,6 +457,17 @@ Examples:
 					Name:  "iroh-port",
 					Usage: "Port for the Iroh relay",
 					Value: "3340",
+				},
+				&cli.StringFlag{
+					Name: "binary-name",
+					Usage: `Override the binary/service name used for all derived defaults.
+					Sets --state-dir, --config-dir, --binary-path, --maddy-user, --maddy-group,
+					and --service-name to /var/lib/NAME, /etc/NAME, /usr/local/bin/NAME, NAME, NAME, NAME.service
+					unless those flags are also explicitly provided.`,
+				},
+				&cli.StringFlag{
+					Name:  "service-name",
+					Usage: "Systemd service name without .service suffix (defaults to binary name)",
 				},
 			},
 		})
@@ -455,23 +494,48 @@ func installCommand(ctx *cli.Context) error {
 	silentPrintln(config.NoLog, "🚀 Maddy Mail Server Installation")
 	silentPrintln(config.NoLog, "==================================")
 
-	// Apply early flags needed for root check
+	// Apply early flags: --binary-name must come first as it sets defaults for other flags
+	if ctx.IsSet("binary-name") {
+		binOverride := ctx.String("binary-name")
+		config.BinaryName = binOverride
+		// Only override derived paths if those flags weren't explicitly set
+		if !ctx.IsSet("state-dir") && !ctx.IsSet("cache-dir") {
+			config.StateDir = "/var/lib/" + binOverride
+		}
+		if !ctx.IsSet("config-dir") {
+			config.ConfigDir = "/etc/" + binOverride
+		}
+		if !ctx.IsSet("binary-path") {
+			config.BinaryPath = "/usr/local/bin/" + binOverride
+		}
+		if !ctx.IsSet("maddy-user") {
+			config.MaddyUser = binOverride
+		}
+		if !ctx.IsSet("maddy-group") {
+			config.MaddyGroup = binOverride
+		}
+	}
+	if ctx.IsSet("service-name") {
+		// service-name overrides the BinaryName used for systemd unit file names
+		config.BinaryName = ctx.String("service-name")
+	}
 	if ctx.IsSet("binary-path") {
 		config.BinaryPath = ctx.String("binary-path")
 	}
 	if ctx.IsSet("config-dir") {
 		config.ConfigDir = ctx.String("config-dir")
 	}
-	if ctx.IsSet("state-dir") {
+	if ctx.IsSet("state-dir") || ctx.IsSet("cache-dir") {
 		config.StateDir = ctx.String("state-dir")
 	}
 
 	// Check if running as root
 	if os.Geteuid() != 0 && !ctx.Bool("dry-run") {
 		// If we're not root, we can only continue if we're not using system-wide paths
-		isSystemInstall := config.ConfigDir == "/etc/maddy" ||
-			config.StateDir == "/var/lib/maddy" ||
-			config.BinaryPath == "/usr/local/bin/maddy"
+		binName := frameworkconfig.BinaryName()
+		isSystemInstall := config.ConfigDir == "/etc/"+binName ||
+			config.StateDir == "/var/lib/"+binName ||
+			config.BinaryPath == "/usr/local/bin/"+binName
 
 		if isSystemInstall {
 			if config.NoLog {
@@ -743,8 +807,8 @@ func installCommand(ctx *cli.Context) error {
 	logger.Printf("User created: %s with home directory %s", config.MaddyUser, config.StateDir)
 	logger.Printf("Directories created: %s, %s, %s/certs",
 		config.StateDir, config.ConfigDir, config.ConfigDir)
-	logger.Printf("Files created: %s/maddy.conf, %s/maddy.service, %s/maddy@.service, %s",
-		config.ConfigDir, config.SystemdPath, config.SystemdPath, config.BinaryPath)
+	logger.Printf("Files created: %s/%s.conf, %s/%s.service, %s/%s@.service, %s",
+		config.ConfigDir, config.BinaryName, config.SystemdPath, config.BinaryName, config.SystemdPath, config.BinaryName, config.BinaryPath)
 	logger.Printf("Permissions set: %s owned by %s:%s", config.StateDir, config.MaddyUser, config.MaddyGroup)
 	logger.Printf("Network ports configured: SMTP:%s, Submission:%s/%s, IMAP:%s/%s",
 		config.SMTPPort, config.SubmissionPort, config.SubmissionTLS, config.IMAPPort, config.IMAPTLS)
@@ -1446,8 +1510,8 @@ func installSystemdFiles(config *InstallConfig, dryRun bool) error {
 	logger.Println("Installing systemd service files")
 
 	systemdFiles := map[string]string{
-		"maddy.service":  systemdServiceTemplate,
-		"maddy@.service": systemdInstanceTemplate,
+		config.BinaryName + ".service":  systemdServiceTemplate,
+		config.BinaryName + "@.service": systemdInstanceTemplate,
 	}
 
 	for filename, content := range systemdFiles {
@@ -1511,7 +1575,7 @@ func installSystemdFiles(config *InstallConfig, dryRun bool) error {
 func generateConfigFile(config *InstallConfig, dryRun bool) error {
 	logger.Println("Generating configuration file")
 
-	configPath := filepath.Join(config.ConfigDir, "maddy.conf")
+	configPath := filepath.Join(config.ConfigDir, config.BinaryName+".conf")
 	logger.Printf("Generating config file: %s (permissions: 644)", configPath)
 
 	if dryRun {
@@ -1542,7 +1606,7 @@ func generateConfigFile(config *InstallConfig, dryRun bool) error {
 	fmt.Printf("     Permissions: 644\n")
 
 	// Execute template
-	tmpl, err := template.New("maddy.conf").Parse(maddyConfigTemplate)
+	tmpl, err := template.New(config.BinaryName + ".conf").Parse(maddyConfigTemplate)
 	if err != nil {
 		return fmt.Errorf("failed to parse config template: %v", err)
 	}
@@ -2011,28 +2075,28 @@ func printNextSteps(config *InstallConfig) {
 	}
 
 	fmt.Printf("\n3. Create first user account:\n")
-	fmt.Printf("   sudo %s --config %s/maddy.conf creds create postmaster@%s\n",
-		config.BinaryPath, config.ConfigDir, config.PrimaryDomain)
-	fmt.Printf("   sudo %s --config %s/maddy.conf imap-acct create postmaster@%s\n",
-		config.BinaryPath, config.ConfigDir, config.PrimaryDomain)
+	fmt.Printf("   sudo %s --config %s/%s.conf creds create postmaster@%s\n",
+		config.BinaryPath, config.ConfigDir, config.BinaryName, config.PrimaryDomain)
+	fmt.Printf("   sudo %s --config %s/%s.conf imap-acct create postmaster@%s\n",
+		config.BinaryPath, config.ConfigDir, config.BinaryName, config.PrimaryDomain)
 
 	fmt.Printf("\n4. Test configuration (optional):\n")
 	prefix := "sudo "
 	if os.Geteuid() != 0 {
 		prefix = ""
 	}
-	fmt.Printf("   %s%s --config %s/maddy.conf run --libexec %s\n",
-		prefix, config.BinaryPath, config.ConfigDir, config.LibexecDir)
+	fmt.Printf("   %s%s --config %s/%s.conf run --libexec %s\n",
+		prefix, config.BinaryPath, config.ConfigDir, config.BinaryName, config.LibexecDir)
 	fmt.Printf("   (Press Ctrl+C to stop test run)\n")
 
 	if !config.SkipSystemd {
-		fmt.Printf("\n5. Start maddy service:\n")
-		fmt.Printf("   sudo systemctl enable maddy\n")
-		fmt.Printf("   sudo systemctl start maddy\n")
+		fmt.Printf("\n5. Start %s service:\n", config.BinaryName)
+		fmt.Printf("   sudo systemctl enable %s\n", config.BinaryName)
+		fmt.Printf("   sudo systemctl start %s\n", config.BinaryName)
 
 		fmt.Printf("\n6. Check service status:\n")
-		fmt.Printf("   sudo systemctl status maddy\n")
-		fmt.Printf("   sudo journalctl -u maddy -f\n")
+		fmt.Printf("   sudo systemctl status %s\n", config.BinaryName)
+		fmt.Printf("   sudo journalctl -u %s -f\n", config.BinaryName)
 	}
 
 	if config.EnableChatmail {
@@ -2048,7 +2112,7 @@ func printNextSteps(config *InstallConfig) {
 	}
 
 	fmt.Printf("\n📖 Documentation: https://maddy.email\n")
-	fmt.Printf("📄 Configuration file: %s/maddy.conf\n", config.ConfigDir)
+	fmt.Printf("📄 Configuration file: %s/%s.conf\n", config.ConfigDir, config.BinaryName)
 
 }
 
@@ -2074,13 +2138,13 @@ func printInstallationSummary(config *InstallConfig) {
 
 	// Files Created
 	fmt.Printf("\n📄 Files Created:\n")
-	fmt.Printf("   - %s/maddy.conf (owner: root, permissions: 644)\n", config.ConfigDir)
+	fmt.Printf("   - %s/%s.conf (owner: root, permissions: 644)\n", config.ConfigDir, config.BinaryName)
 	if config.GenerateCerts {
 		fmt.Printf("   - %s (owner: %s, permissions: 644)\n", config.TLSCertPath, config.MaddyUser)
 		fmt.Printf("   - %s (owner: %s, permissions: 600)\n", config.TLSKeyPath, config.MaddyUser)
 	}
-	fmt.Printf("   - %s/maddy.service (owner: root, permissions: 644)\n", config.SystemdPath)
-	fmt.Printf("   - %s/maddy@.service (owner: root, permissions: 644)\n", config.SystemdPath)
+	fmt.Printf("   - %s/%s.service (owner: root, permissions: 644)\n", config.SystemdPath, config.BinaryName)
+	fmt.Printf("   - %s/%s@.service (owner: root, permissions: 644)\n", config.SystemdPath, config.BinaryName)
 	fmt.Printf("   - %s (owner: root, permissions: 755)\n", config.BinaryPath)
 
 	// Permissions Applied
@@ -2107,11 +2171,11 @@ func printInstallationSummary(config *InstallConfig) {
 	// System Integration
 	fmt.Printf("\n⚙️  System Integration:\n")
 	fmt.Printf("   - Systemd daemon reloaded\n")
-	fmt.Printf("   - Service available as: systemctl {start|stop|status} maddy\n")
-	fmt.Printf("   - Instance service available as: systemctl {start|stop|status} maddy@<config>\n")
+	fmt.Printf("   - Service available as: systemctl {start|stop|status} %s\n", config.BinaryName)
+	fmt.Printf("   - Instance service available as: systemctl {start|stop|status} %s@<config>\n", config.BinaryName)
 	fmt.Printf("   - Binary available system-wide at: %s\n", config.BinaryPath)
-	fmt.Printf("   - Service command: %s --config %s/maddy.conf run --libexec %s\n",
-		config.BinaryPath, config.ConfigDir, config.LibexecDir)
+	fmt.Printf("   - Service command: %s --config %s/%s.conf run --libexec %s\n",
+		config.BinaryPath, config.ConfigDir, config.BinaryName, config.LibexecDir)
 
 	// Database and Storage
 	fmt.Printf("\n💾 Database and Storage:\n")
@@ -2158,11 +2222,11 @@ Group={{.MaddyGroup}}
 # in config will be relative to it unless handled specially.
 WorkingDirectory={{.StateDir}}
 
-ConfigurationDirectory=maddy
-RuntimeDirectory=maddy
-StateDirectory=maddy
-LogsDirectory=maddy
-ReadOnlyPaths=/usr/lib/maddy
+ConfigurationDirectory={{.BinaryName}}
+RuntimeDirectory={{.BinaryName}}
+StateDirectory={{.BinaryName}}
+LogsDirectory={{.BinaryName}}
+ReadOnlyPaths=/usr/lib/{{.BinaryName}}
 ReadWritePaths={{.StateDir}} {{.ConfigDir}}
 
 # Strict sandboxing. You have no reason to trust code written by strangers from GitHub.
@@ -2221,9 +2285,9 @@ Environment=MADDY_SQLITE_UNSAFE_SYNC_OFF=1
 
 # Copy pending config from state dir if written by admin reload API.
 # Runs as root (+) before dropping to maddy user. Uses cp+rm for cross-device support.
-ExecStartPre=-+/bin/sh -c 'test -f {{.StateDir}}/maddy.conf.pending && cp {{.StateDir}}/maddy.conf.pending {{.ConfigDir}}/maddy.conf && rm {{.StateDir}}/maddy.conf.pending || true'
+ExecStartPre=-+/bin/sh -c 'test -f {{.StateDir}}/{{.BinaryName}}.conf.pending && cp {{.StateDir}}/{{.BinaryName}}.conf.pending {{.ConfigDir}}/{{.BinaryName}}.conf && rm {{.StateDir}}/{{.BinaryName}}.conf.pending || true'
 
-ExecStart={{.BinaryPath}} --config {{.ConfigDir}}/maddy.conf {{if .Debug}}--debug {{end}}run --libexec {{.LibexecDir}}
+ExecStart={{.BinaryPath}} --config {{.ConfigDir}}/{{.BinaryName}}.conf {{if .Debug}}--debug {{end}}run --libexec {{.LibexecDir}}
 
 ExecReload=/bin/kill -USR1 $MAINPID
 ExecReload=/bin/kill -USR2 $MAINPID
@@ -2246,11 +2310,11 @@ NotifyAccess=main
 User={{.MaddyUser}}
 Group={{.MaddyGroup}}
 
-ConfigurationDirectory=maddy
-RuntimeDirectory=maddy
-StateDirectory=maddy
-LogsDirectory=maddy
-ReadOnlyPaths=/usr/lib/maddy
+ConfigurationDirectory={{.BinaryName}}
+RuntimeDirectory={{.BinaryName}}
+StateDirectory={{.BinaryName}}
+LogsDirectory={{.BinaryName}}
+ReadOnlyPaths=/usr/lib/{{.BinaryName}}
 ReadWritePaths={{.StateDir}} {{.ConfigDir}}
 
 # Strict sandboxing. You have no reason to trust code written by strangers from GitHub.
@@ -2309,7 +2373,7 @@ Environment=MADDY_SQLITE_UNSAFE_SYNC_OFF=1
 
 # Copy pending config from state dir if written by admin reload API.
 # Runs as root (+) before dropping to maddy user. Uses cp+rm for cross-device support.
-ExecStartPre=-+/bin/sh -c 'test -f {{.StateDir}}/maddy.conf.pending && cp {{.StateDir}}/maddy.conf.pending {{.ConfigDir}}/%i.conf && rm {{.StateDir}}/maddy.conf.pending || true'
+ExecStartPre=-+/bin/sh -c 'test -f {{.StateDir}}/{{.BinaryName}}.conf.pending && cp {{.StateDir}}/{{.BinaryName}}.conf.pending {{.ConfigDir}}/%i.conf && rm {{.StateDir}}/{{.BinaryName}}.conf.pending || true'
 
 ExecStart={{.BinaryPath}} --config {{.ConfigDir}}/%i.conf run --libexec {{.LibexecDir}}
 ExecReload=/bin/kill -USR1 $MAINPID

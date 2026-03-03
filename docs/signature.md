@@ -55,7 +55,7 @@ sudo maddy update https://github.com/themadorg/madmail/releases/download/v1.1.0/
 - **Binary Replacement**: The replacement process is managed via `systemd`:
     1. Stop service: `systemctl stop maddy`
     2. Replace the binary file in the destination path (usually `/usr/local/bin/maddy`).
-    3. Restart service: `systemctl start maddy`
+    3. Restart service: `systemctl start <binary>`
 - **Permissions**: The upgrade command must be run with `root` or `sudo` to manage services and replace files in system paths.
 
 ## Release Process (Developer)

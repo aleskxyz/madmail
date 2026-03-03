@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	frameworkconfig "github.com/themadorg/madmail/framework/config"
 	maddycli "github.com/themadorg/madmail/internal/cli"
 	clitools2 "github.com/themadorg/madmail/internal/cli/clitools"
 	"github.com/urfave/cli/v2"
@@ -255,7 +256,8 @@ func detectInstallation() (*UninstallConfig, error) {
 
 	// Check for systemd services
 	systemdPaths := []string{"/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"}
-	serviceNames := []string{"maddy.service", "maddy@.service", "iroh-relay.service"}
+	binName := frameworkconfig.BinaryName()
+	serviceNames := []string{binName + ".service", binName + "@.service", "iroh-relay.service"}
 
 	for _, path := range systemdPaths {
 		for _, service := range serviceNames {
@@ -263,8 +265,8 @@ func detectInstallation() (*UninstallConfig, error) {
 			if _, err := os.Stat(servicePath); err == nil {
 				config.ServiceFiles = append(config.ServiceFiles, servicePath)
 				config.InstallationFound = true
-				if service == "maddy.service" {
-					config.SystemdUnit = "maddy"
+				if service == binName+".service" {
+					config.SystemdUnit = binName
 				}
 				if service == "iroh-relay.service" {
 					config.IrohUnit = "iroh-relay"
@@ -291,7 +293,7 @@ func detectInstallation() (*UninstallConfig, error) {
 	}
 
 	// Check common locations for config files
-	configPaths := []string{"/etc/maddy", "/usr/local/etc/maddy"}
+	configPaths := []string{"/etc/" + binName, "/usr/local/etc/" + binName}
 	for _, path := range configPaths {
 		if _, err := os.Stat(path); err == nil {
 			config.ConfigDir = path
@@ -315,7 +317,7 @@ func detectInstallation() (*UninstallConfig, error) {
 
 	// Try to parse main config file to get more information
 	if config.ConfigDir != "" {
-		mainConfig := filepath.Join(config.ConfigDir, "maddy.conf")
+		mainConfig := filepath.Join(config.ConfigDir, binName+".conf")
 		if _, err := os.Stat(mainConfig); err == nil {
 			config.ConfigPath = mainConfig
 			if err := parseConfigFile(config, mainConfig); err != nil {
@@ -325,7 +327,11 @@ func detectInstallation() (*UninstallConfig, error) {
 	}
 
 	// Check for common binary locations
-	binaryPaths := []string{"/usr/local/bin/maddy", "/usr/bin/maddy", "/opt/maddy/bin/maddy"}
+	binaryPaths := []string{
+		"/usr/local/bin/" + binName,
+		"/usr/bin/" + binName,
+		"/opt/" + binName + "/bin/" + binName,
+	}
 	for _, path := range binaryPaths {
 		if _, err := os.Stat(path); err == nil {
 			config.BinaryPath = path
@@ -335,7 +341,10 @@ func detectInstallation() (*UninstallConfig, error) {
 	}
 
 	// Check for iroh-relay binary
-	irohPaths := []string{"/usr/local/lib/maddy/iroh-relay", "/usr/lib/maddy/iroh-relay"}
+	irohPaths := []string{
+		"/usr/local/lib/" + binName + "/iroh-relay",
+		"/usr/lib/" + binName + "/iroh-relay",
+	}
 	for _, path := range irohPaths {
 		if _, err := os.Stat(path); err == nil {
 			config.IrohBinaryPath = path
@@ -344,15 +353,15 @@ func detectInstallation() (*UninstallConfig, error) {
 		}
 	}
 
-	// Check for maddy user
-	if _, err := user.Lookup("maddy"); err == nil {
-		config.MaddyUser = "maddy"
-		config.MaddyGroup = "maddy"
+	// Check for service user
+	if _, err := user.Lookup(binName); err == nil {
+		config.MaddyUser = binName
+		config.MaddyGroup = binName
 		config.InstallationFound = true
 	}
 
 	// Check for state directory and databases
-	statePaths := []string{"/var/lib/maddy", "/usr/local/var/lib/maddy"}
+	statePaths := []string{"/var/lib/" + binName, "/usr/local/var/lib/" + binName}
 	if config.StateDir != "" {
 		statePaths = []string{config.StateDir}
 	}
@@ -375,7 +384,7 @@ func detectInstallation() (*UninstallConfig, error) {
 	}
 
 	// Check for log files
-	logPaths := []string{"/var/log/maddy", "/usr/local/var/log/maddy"}
+	logPaths := []string{"/var/log/" + binName, "/usr/local/var/log/" + binName}
 	for _, path := range logPaths {
 		if _, err := os.Stat(path); err == nil {
 			if err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {

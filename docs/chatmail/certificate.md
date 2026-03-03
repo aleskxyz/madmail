@@ -54,7 +54,7 @@ tls {
     loader autocert {
         hostname chat.example.org
         email admin@example.org
-        cache_dir /var/lib/maddy/autocert
+        cache_dir /var/lib/<binary>/autocert
         agreed
     }
 }
@@ -69,7 +69,7 @@ tls {
 
 ### Certificate Storage
 
-Certificates are cached in `/var/lib/maddy/autocert/` with mode `700` (owner: `maddy`). Certificates persist across restarts and are automatically renewed before expiry.
+Certificates are cached in `/var/lib/<binary>/autocert/` with mode `700` (owner: `<binary-user>`). Certificates persist across restarts and are automatically renewed before expiry.
 
 ---
 
@@ -99,7 +99,7 @@ tls {
         email admin@example.org
         agreed
         challenge dns-01
-        store_path /var/lib/maddy/acme
+        store_path /var/lib/<binary>/acme
         dns cloudflare {
             api_token "your-api-token"
         }
@@ -119,7 +119,7 @@ tls {
 
 ### Certificate Storage
 
-Certificates are stored in `/var/lib/maddy/acme/` with mode `700` (owner: `maddy`).
+Certificates are stored in `/var/lib/<binary>/acme/` with mode `700` (owner: `<binary-user>`).
 
 ---
 
@@ -189,12 +189,12 @@ sudo maddy install \
 ### Generated Config
 
 ```
-tls file /var/lib/maddy/certs/fullchain.pem /var/lib/maddy/certs/privkey.pem
+tls file /var/lib/<binary>/certs/fullchain.pem /var/lib/<binary>/certs/privkey.pem
 ```
 
 ### Certificate Storage & Persistence
 
-Self-signed certificates are stored in the **state directory** (`/var/lib/maddy/certs/`) with secure permissions:
+Self-signed certificates are stored in the **state directory** (`/var/lib/<binary>/certs/`) with secure permissions:
 
 | File | Owner | Mode | Description |
 |------|-------|------|-------------|
@@ -215,7 +215,7 @@ When you're ready to move to production with a real domain:
 
 ```bash
 # Delete old self-signed certs
-sudo rm /var/lib/maddy/certs/fullchain.pem /var/lib/maddy/certs/privkey.pem
+sudo rm /var/lib/<binary>/certs/fullchain.pem /var/lib/<binary>/certs/privkey.pem
 
 # Re-run install with autocert
 sudo maddy install \
@@ -236,7 +236,7 @@ sudo systemctl restart maddy
 
 ```bash
 # Remove old self-signed certs so auto-detect doesn't pick them up
-sudo rm /var/lib/maddy/certs/fullchain.pem /var/lib/maddy/certs/privkey.pem
+sudo rm /var/lib/<binary>/certs/fullchain.pem /var/lib/<binary>/certs/privkey.pem
 
 # Re-install with autocert
 sudo maddy install \

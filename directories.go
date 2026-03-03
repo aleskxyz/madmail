@@ -4,43 +4,26 @@
 package maddy
 
 var (
-	// ConfigDirectory specifies platform-specific value
-	// that should be used as a location of default configuration
+	// ConfigDirectory specifies the configuration directory.
+	// It can be overridden at build time via -X linker flag:
+	//   -X github.com/themadorg/madmail.ConfigDirectory=/etc/myapp
 	//
-	// It should not be changed and is defined as a variable
-	// only for purposes of modification using -X linker flag.
-	ConfigDirectory = "/etc/maddy"
+	// If empty (the default), the directory is derived at runtime from
+	// the running binary name: /etc/<binaryname>.
+	//
+	// It should not be changed at runtime and is a variable only
+	// for linker flag modification.
+	ConfigDirectory = ""
 
-	// DefaultStateDirectory specifies platform-specific
-	// default for StateDirectory.
-	//
-	// Most code should use StateDirectory instead since
-	// it will contain the effective location of the state
-	// directory.
-	//
-	// It should not be changed and is defined as a variable
-	// only for purposes of modification using -X linker flag.
-	DefaultStateDirectory = "/var/lib/maddy"
+	// DefaultStateDirectory specifies the default state directory.
+	// If empty, derived at runtime as /var/lib/<binaryname>.
+	DefaultStateDirectory = ""
 
-	// DefaultRuntimeDirectory specifies platform-specific
-	// default for RuntimeDirectory.
-	//
-	// Most code should use RuntimeDirectory instead since
-	// it will contain the effective location of the state
-	// directory.
-	//
-	// It should not be changed and is defined as a variable
-	// only for purposes of modification using -X linker flag.
-	DefaultRuntimeDirectory = "/run/maddy"
+	// DefaultRuntimeDirectory specifies the default runtime directory.
+	// If empty, derived at runtime as /run/<binaryname>.
+	DefaultRuntimeDirectory = ""
 
-	// DefaultLibexecDirectory specifies platform-specific
-	// default for LibexecDirectory.
-	//
-	// Most code should use LibexecDirectory since it will
-	// contain the effective location of the libexec
-	// directory.
-	//
-	// It should not be changed and is defined as a variable
-	// only for purposes of modification using -X linker flag.
-	DefaultLibexecDirectory = "/usr/lib/maddy"
+	// DefaultLibexecDirectory specifies the default libexec directory.
+	// If empty, derived at runtime as /usr/lib/<binaryname>.
+	DefaultLibexecDirectory = ""
 )

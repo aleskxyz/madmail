@@ -4,7 +4,7 @@ It is generally possible to just install latest version (e.g. using build.sh scr
 
 **Recommended Method**: For versions **v0.8.103 and later**, use the built-in `maddy update` or `maddy upgrade` commands to safely replace the binary with signature verification. See the [Setup Guide](./chatmail-setup.md) for details.
 
-It is recommended to backup state directory (usually /var/lib/maddy for Linux)
+It is recommended to backup state directory (usually /var/lib/<binary> for Linux)
 before doing so. The new server version may automatically convert DB files in a
 way that will make them unreadable by older versions.
 
@@ -29,11 +29,11 @@ need to be reset.
 systemctl stop maddy
 ```
 
-2. Take a backup of `imapsql.db*` files in state directory (/var/lib/maddy).
+2. Take a backup of `imapsql.db*` files in state directory (/var/lib/<binary>).
 
 ```
 mkdir backup
-cp /var/lib/maddy/imapsql.db* backup/
+cp /var/lib/<binary>/imapsql.db* backup/
 ```
 
 3. Compile migration utility:
@@ -49,7 +49,7 @@ go build
 4. Run compiled binary:
 
 ```
-./migrate-db-0.2 /var/lib/maddy/imapsql.db
+./migrate-db-0.2 /var/lib/<binary>/imapsql.db
 ```
 
 5. Open maddy.conf and make following changes:
@@ -80,7 +80,7 @@ pass_table local_authdb {
 7. Start the server back.
 
 ```
-systemctl start maddy
+systemctl start <binary>
 ```
 
 ## 0.1 -> 0.2

@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/themadorg/madmail/framework/config"
+	frameworkconfig "github.com/themadorg/madmail/framework/config"
 	"github.com/themadorg/madmail/framework/module"
 	"github.com/themadorg/madmail/internal/servertracker"
 )
@@ -78,9 +79,9 @@ func StatusHandler(deps StatusDeps) func(method string, body json.RawMessage) (i
 		}
 
 		// Server tracker status (boot time + email servers)
-		runtimeDir := config.RuntimeDirectory
+		runtimeDir := frameworkconfig.RuntimeDirectory
 		if runtimeDir == "" {
-			runtimeDir = "/run/maddy"
+			runtimeDir = "/run/" + frameworkconfig.BinaryName()
 		}
 		status, err := servertracker.ReadStatusFile(runtimeDir)
 		if err == nil {
@@ -339,7 +340,7 @@ func RestartHandler() func(method string, body json.RawMessage) (interface{}, in
 		// Schedule restart after a short delay so the response gets sent first
 		go func() {
 			time.Sleep(500 * time.Millisecond)
-			_ = exec.Command("systemctl", "restart", "maddy.service").Run()
+			_ = exec.Command("systemctl", "restart", frameworkconfig.ServiceName()).Run()
 		}()
 
 		return map[string]string{

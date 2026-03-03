@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	frameworkconfig "github.com/themadorg/madmail/framework/config"
 	"github.com/themadorg/madmail/internal/auth"
 	maddycli "github.com/themadorg/madmail/internal/cli"
 	"github.com/themadorg/madmail/internal/cli/clitools"
@@ -109,7 +110,8 @@ func performUpgrade(newBinPath string) error {
 
 	// Stop systemd services
 	fmt.Println("⏹️ Stopping services...")
-	_ = exec.Command("systemctl", "stop", "maddy.service").Run()
+	binSvc := frameworkconfig.ServiceName()
+	_ = exec.Command("systemctl", "stop", binSvc).Run()
 	_ = exec.Command("systemctl", "stop", "iroh-relay.service").Run()
 
 	// Wait for the service to fully stop to avoid "text file busy"
@@ -159,9 +161,9 @@ func performUpgrade(newBinPath string) error {
 	}
 
 	fmt.Println("▶️ Starting services...")
-	if err := exec.Command("systemctl", "start", "maddy.service").Run(); err != nil {
-		fmt.Printf("⚠️ Warning: Failed to start maddy.service: %v\n", err)
-		fmt.Println("Manual start might be required: systemctl start maddy.service")
+	if err := exec.Command("systemctl", "start", binSvc).Run(); err != nil {
+		fmt.Printf("⚠️ Warning: Failed to start %s: %v\n", binSvc, err)
+		fmt.Printf("Manual start might be required: systemctl start %s\n", binSvc)
 	}
 
 	if _, err := os.Stat("/etc/systemd/system/iroh-relay.service"); err == nil {

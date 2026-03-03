@@ -47,6 +47,7 @@ from scenarios import (
     test_15_iroh_discovery,
     test_16_webxdc_realtime,
     test_17_admin_api,
+    test_18_stealth_mode,
 )
 from utils.lxc import LXCManager
 from stress import run_stress
@@ -93,6 +94,7 @@ def main():
     parser.add_argument("--test-15", action="store_true", help="Run Iroh Discovery Test")
     parser.add_argument("--test-16", action="store_true", help="Run WebXDC Realtime P2P Test")
     parser.add_argument("--test-17", action="store_true", help="Run Admin API Test")
+    parser.add_argument("--test-18", action="store_true", help="Run Stealth / Camouflage Mode Test")
     parser.add_argument("--domain", help="Specify domain/IP for tests (updates REMOTE1/REMOTE2)")
     parser.add_argument("--lxc", action="store_true", help="Run tests in local LXC containers")
     parser.add_argument("--keep-lxc", action="store_true", help="Keep LXC containers alive after test")
@@ -107,10 +109,10 @@ def main():
     
     # If no specific tests selected, run all
     run_all = args.all or not any([
-        args.test_1, args.test_2, args.test_3, args.test_4, 
-        args.test_5, args.test_6, args.test_7, args.test_8, args.test_9, 
-        args.test_10, args.test_11, args.test_12, args.test_13, args.test_14, 
-        args.test_15, args.test_16, args.test_17
+        args.test_1, args.test_2, args.test_3, args.test_4,
+        args.test_5, args.test_6, args.test_7, args.test_8, args.test_9,
+        args.test_10, args.test_11, args.test_12, args.test_13, args.test_14,
+        args.test_15, args.test_16, args.test_17, args.test_18,
     ])
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -350,6 +352,16 @@ def main():
             if run_all or args.test_17:
                 test_17_admin_api.run(dc, remote1, test_dir)
                 print("✓ TEST #17 PASSED: Admin API verified")
+
+            # ==========================================
+            # TEST #18: Stealth / Camouflage Mode
+            # ==========================================
+            if run_all or args.test_18:
+                print("\n" + "="*50)
+                print("TEST #18: Stealth / Camouflage Mode")
+                print("="*50)
+                test_18_stealth_mode.run(test_dir=test_dir)
+                print("✓ TEST #18 PASSED: Stealth / Camouflage Mode verified")
 
             # ==========================================
             # ALL TESTS COMPLETE

@@ -14,7 +14,7 @@ All requests are `POST /api/admin` with a JSON body.
 ## Authentication
 
 The Admin API is **enabled by default** with an auto-generated token. On first startup,
-Madmail generates a random 43-character token and stores it at `/var/lib/maddy/admin_token`.
+Madmail generates a random 43-character token and stores it at `/var/lib/<binary>/admin_token`.
 
 ### Retrieving the Token
 
@@ -276,7 +276,7 @@ The panel supports both **light and dark mode** via a toggle in the header, and 
 ## Security Considerations
 
 - The admin token is a shared secret — treat it like a password
-- The auto-generated token file (`/var/lib/maddy/admin_token`) is created with `0600` permissions (root-only readable)
+- The auto-generated token file (`/var/lib/<binary>/admin_token`) is created with `0600` permissions (root-only readable)
 - Never expose the admin token in logs or version control
 - The API is rate-limited to 10 failed auth attempts per minute per IP
 - Accounts cannot be created through the API (passwords never leave the system)

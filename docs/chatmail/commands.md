@@ -8,7 +8,7 @@ These flags apply to all commands:
 
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
-| `--config PATH` | `MADDY_CONFIG` | `/etc/maddy/maddy.conf` | Configuration file to use |
+| `--config PATH` | `MADDY_CONFIG` | `/etc/<binary>/<binary>.conf` | Configuration file to use |
 | `--debug` | — | `false` | Enable debug logging |
 
 ---
@@ -23,7 +23,7 @@ maddy run [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--libexec PATH` | `/var/lib/maddy` | Path to the libexec directory |
+| `--libexec PATH` | `/var/lib/<binary>` | Path to the libexec directory |
 | `--log TARGET` | `stderr` | Logging target(s) |
 
 ### Examples
@@ -33,7 +33,7 @@ maddy run [options]
 sudo maddy run
 
 # Start with custom config and libexec dir
-sudo maddy --config /etc/maddy/maddy.conf run --libexec /var/lib/maddy
+sudo maddy run --libexec /var/lib/maddy
 
 # Start with debug logging
 sudo maddy --debug run
@@ -71,9 +71,9 @@ maddy install [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--state-dir PATH` | `/var/lib/maddy` | Directory for maddy state files (databases, certs) |
-| `--config-dir PATH` | `/etc/maddy` | Directory for configuration files |
-| `--libexec-dir PATH` | `/var/lib/maddy` | Directory for runtime files |
+| `--state-dir PATH` / `--cache-dir PATH` | `/var/lib/<binary>` | State/cache directory (databases, certs) |
+| `--config-dir PATH` | `/etc/<binary>` | Directory for configuration files |
+| `--libexec-dir PATH` | `/var/lib/<binary>` | Directory for runtime helper files |
 
 #### TLS Configuration
 
@@ -137,10 +137,12 @@ maddy install [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--binary-path PATH` | `/usr/local/bin/maddy` | Where to install the maddy binary |
+| `--binary-name NAME` | *(binary name)* | Override name used for all derived paths (sets user, group, service, dirs) |
+| `--service-name NAME` | *(binary name)* | Systemd unit name without `.service` suffix |
+| `--binary-path PATH` | `/usr/local/bin/<binary>` | Where to install the binary |
 | `--systemd-path PATH` | `/etc/systemd/system` | Directory for systemd service files |
-| `--maddy-user USER` | `maddy` | System user to run maddy as |
-| `--maddy-group GROUP` | `maddy` | System group to run maddy as |
+| `--maddy-user USER` | *(binary name)* | System user to run the service as |
+| `--maddy-group GROUP` | *(binary name)* | System group to run the service as |
 | `--skip-user` | `false` | Skip creation of system user and group |
 | `--skip-systemd` | `false` | Skip systemd service file installation |
 
@@ -263,7 +265,7 @@ See what would be done without making any changes:
 sudo maddy install --simple --ip 203.0.113.50 --dry-run
 ```
 
-#### 8. Custom Ports and Directories
+#### 8. Custom Paths and Directories
 
 ```bash
 sudo maddy install \
@@ -274,6 +276,44 @@ sudo maddy install \
   --maddy-user mailserver \
   --maddy-group mailserver
 ```
+
+#### 9. Stealth / Camouflage Installation
+
+In restricted environments (Iran, Russia, etc.), automated government scans look for
+known service names in `ps aux`, `systemctl list-units`, and `/etc/`. Renaming the
+binary makes the mail server invisible to these scans.
+
+**Method A — Rename the binary before installing (recommended):**
+
+```bash
+# Copy the binary under an innocuous-looking name
+cp maddy /usr/local/bin/sysmond
+
+# Install — all paths are derived from the binary name automatically
+sudo /usr/local/bin/sysmond install --simple --ip 1.2.3.4
+```
+
+Government/ISP scans will now see:
+
+```
+ps aux      → sysmond --config /etc/sysmond/sysmond.conf run ...
+systemctl   → sysmond.service        (not maddy.service)
+/etc/       → /etc/sysmond/          (not /etc/maddy/)
+/var/lib/   → /var/lib/sysmond/      (not /var/lib/maddy/)
+user        → sysmond                (not maddy)
+```
+
+**Method B — Keep the binary name, override via flag:**
+
+```bash
+sudo ./maddy install --simple --ip 1.2.3.4 --binary-name sysmond
+```
+
+This creates all paths under `sysmond` even though the binary is still named `maddy`.
+
+**Good disguise names:** anything that looks like a legitimate system daemon
+(e.g. `sysmond`, `logrotated`, `networkd-helper`, `udevd-proxy`, `crond`).
+Avoid real program names that may conflict with existing system services.
 
 #### 9. Interactive Installation
 
@@ -419,10 +459,10 @@ maddy status [options]
 
 ```bash
 # Basic status
-maddy --config /etc/maddy/maddy.conf status
+maddy status
 
 # Detailed per-port breakdown
-maddy --config /etc/maddy/maddy.conf status --details
+maddy status --details
 ```
 
 ### Output
@@ -501,16 +541,16 @@ maddy creds SUBCOMMAND [options] [args]
 
 ```bash
 # Create a user
-sudo maddy --config /etc/maddy/maddy.conf creds create user@example.org
+sudo maddy creds create user@example.org
 
 # List all users
-sudo maddy --config /etc/maddy/maddy.conf creds list
+sudo maddy creds list
 
 # Change password
-sudo maddy --config /etc/maddy/maddy.conf creds password user@example.org
+sudo maddy creds password user@example.org
 
 # Remove credentials
-sudo maddy --config /etc/maddy/maddy.conf creds remove user@example.org
+sudo maddy creds remove user@example.org
 ```
 
 ### `maddy imap-acct`
@@ -531,10 +571,10 @@ maddy imap-acct SUBCOMMAND [options] [args]
 
 ```bash
 # Create IMAP account (after creating credentials)
-sudo maddy --config /etc/maddy/maddy.conf imap-acct create user@example.org
+sudo maddy imap-acct create user@example.org
 
 # List all IMAP accounts
-sudo maddy --config /etc/maddy/maddy.conf imap-acct list
+sudo maddy imap-acct list
 ```
 
 ### `maddy delete`
@@ -556,10 +596,10 @@ maddy delete [options] USERNAME
 
 ```bash
 # Delete with confirmation prompt
-sudo maddy --config /etc/maddy/maddy.conf delete user@example.org
+sudo maddy delete user@example.org
 
 # Delete without confirmation
-sudo maddy --config /etc/maddy/maddy.conf delete -y user@example.org
+sudo maddy delete -y user@example.org
 ```
 
 ---
@@ -582,13 +622,13 @@ maddy blocklist SUBCOMMAND [options] [args]
 
 ```bash
 # List blocked users
-sudo maddy --config /etc/maddy/maddy.conf blocklist list
+sudo maddy blocklist list
 
 # Block a user
-sudo maddy --config /etc/maddy/maddy.conf blocklist add user@example.org "spam"
+sudo maddy blocklist add user@example.org "spam"
 
 # Unblock a user
-sudo maddy --config /etc/maddy/maddy.conf blocklist remove user@example.org
+sudo maddy blocklist remove user@example.org
 ```
 
 ---
@@ -613,19 +653,19 @@ maddy sharing SUBCOMMAND [options] [args]
 
 ```bash
 # Create a contact sharing link
-maddy --config /etc/maddy/maddy.conf sharing create myname "https://i.delta.chat/#ABCDEF..." "My Name"
+maddy sharing create myname "https://i.delta.chat/#ABCDEF..." "My Name"
 
 # List all links
-maddy --config /etc/maddy/maddy.conf sharing list
+maddy sharing list
 
 # Reserve a slug for later
-maddy --config /etc/maddy/maddy.conf sharing reserve vip
+maddy sharing reserve vip
 
 # Edit a link
-maddy --config /etc/maddy/maddy.conf sharing edit myname "https://i.delta.chat/#NEWKEY..." "New Name"
+maddy sharing edit myname "https://i.delta.chat/#NEWKEY..." "New Name"
 
 # Delete a link
-maddy --config /etc/maddy/maddy.conf sharing delete myname
+maddy sharing delete myname
 ```
 
 ---
@@ -651,16 +691,16 @@ maddy endpoint-cache SUBCOMMAND [options] [args]
 
 ```bash
 # Route mail for a domain to a specific server
-maddy --config /etc/maddy/maddy.conf endpoint-cache set nine.testrun.org 10.0.0.5 "Route to staging"
+maddy endpoint-cache set nine.testrun.org 10.0.0.5 "Route to staging"
 
 # Redirect IP-based delivery
-maddy --config /etc/maddy/maddy.conf endpoint-cache set 1.1.1.1 2.2.2.2 "Redirect"
+maddy endpoint-cache set 1.1.1.1 2.2.2.2 "Redirect"
 
 # List all overrides
-maddy --config /etc/maddy/maddy.conf endpoint-cache list
+maddy endpoint-cache list
 
 # Remove an override
-maddy --config /etc/maddy/maddy.conf endpoint-cache remove nine.testrun.org
+maddy endpoint-cache remove nine.testrun.org
 ```
 
 ---
@@ -680,13 +720,13 @@ maddy html-export DEST_DIR
 Configure maddy to serve HTML from an external directory (or revert to embedded files).
 
 ```bash
-maddy --config /etc/maddy/maddy.conf html-serve WWW_DIR
+maddy html-serve WWW_DIR
 ```
 
 Use `embedded` as the directory to revert to built-in templates:
 
 ```bash
-maddy --config /etc/maddy/maddy.conf html-serve embedded
+maddy html-serve embedded
 ```
 
 ### Examples
@@ -699,13 +739,13 @@ maddy html-export /tmp/maddy-templates
 vim /tmp/maddy-templates/index.html
 
 # Deploy custom templates
-sudo cp -r /tmp/maddy-templates /var/lib/maddy/www
-sudo chown -R maddy:maddy /var/lib/maddy/www
-maddy --config /etc/maddy/maddy.conf html-serve /var/lib/maddy/www
+sudo cp -r /tmp/maddy-templates /var/lib/<binary>/www
+sudo chown -R maddy:maddy /var/lib/<binary>/www
+maddy html-serve /var/lib/<binary>/www
 sudo systemctl restart maddy
 
 # Revert to built-in templates
-maddy --config /etc/maddy/maddy.conf html-serve embedded
+maddy html-serve embedded
 sudo systemctl restart maddy
 ```
 
@@ -745,14 +785,14 @@ maddy hash [options]
 # 1. Install with IP address
 sudo maddy install --simple --ip YOUR_IP
 
-# 2. Start the service
+# 2. Start the service (service name matches binary name)
 sudo systemctl enable --now maddy
 
 # 3. Get admin token
 maddy admin-token
 
 # 4. Check status
-maddy --config /etc/maddy/maddy.conf status
+maddy status
 ```
 
 ### First-Time Setup (Production)
@@ -772,13 +812,13 @@ sudo maddy install \
 sudo systemctl enable --now maddy
 
 # 4. Verify
-maddy --config /etc/maddy/maddy.conf status --details
+maddy status --details
 ```
 
 ### Manual User Management
 
 ```bash
-CONFIG="--config /etc/maddy/maddy.conf"
+# Config path auto-detected from binary name; pass --config if using a custom path
 
 # Create a user
 sudo maddy $CONFIG creds create user@example.org
@@ -801,7 +841,7 @@ sudo maddy upgrade https://your-server/maddy
 maddy version
 
 # Verify service is running
-maddy --config /etc/maddy/maddy.conf status
+maddy status
 ```
 
 ---
