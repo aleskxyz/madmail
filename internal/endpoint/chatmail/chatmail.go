@@ -1625,6 +1625,12 @@ func (e *Endpoint) setupAdminAPI() {
 		MailDomain: e.mailDomain,
 	}))
 
+	handler.Register("/admin/notice", resources.NoticeHandler(resources.NoticeDeps{
+		AuthDB:     e.authDB,
+		Storage:    e.storage,
+		MailDomain: e.mailDomain,
+	}))
+
 	handler.Register("/admin/quota", resources.QuotaHandler(resources.QuotaDeps{
 		Storage: e.storage,
 	}))
