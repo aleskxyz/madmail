@@ -59,8 +59,46 @@ jobs:
           ./build.sh
           ./build.sh --destdir destdir/ install
 
+  legacy-build:
+    name: Legacy Build (Static/GLIBC-free)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+          cache: true
+      - name: Create iroh-relay placeholder
+        run: |
+          mkdir -p internal/endpoint/iroh/assets
+          touch internal/endpoint/iroh/assets/iroh-relay
+      - name: Build legacy static binary
+        run: |
+          make build_legacy
+      - name: Verify binary is static
+        run: |
+          echo "🔍 Checking binary linkage..."
+          file build/maddy-amd64-legacy
+          if ldd build/maddy-amd64-legacy 2>&1 | grep -q "not a dynamic executable"; then
+            echo "✅ Binary is statically linked (no GLIBC dependency)"
+          else
+            echo "❌ Binary is dynamically linked! This defeats the purpose."
+            ldd build/maddy-amd64-legacy
+            exit 1
+          fi
+      - name: Smoke test binary
+        run: |
+          ./build/maddy-amd64-legacy version
+      - name: Upload legacy binary artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: maddy-amd64-legacy
+          path: build/maddy-amd64-legacy
+          retention-days: 30
+
   build-summary:
-    needs: [lint-and-build, docker-build-push]
+    needs: [lint-and-build, legacy-build, docker-build-push]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -78,6 +116,7 @@ jobs:
           echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Lint & Build | ${{ needs.lint-and-build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Legacy Build | ${{ needs.legacy-build.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Docker Build | ${{ needs.docker-build-push.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🔗 Links" >> $GITHUB_STEP_SUMMARY

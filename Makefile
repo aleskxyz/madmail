@@ -10,6 +10,7 @@ export
 # Variables
 BINARY=build/maddy
 BINARY_AMD64=build/maddy-amd64
+BINARY_AMD64_LEGACY=build/maddy-amd64-legacy
 BINARY_ARM64=build/maddy-arm64
 VERSION_FILE=.version
 # Unit tests
@@ -39,6 +40,16 @@ build_all:
 	GOARCH=amd64 sh build.sh build
 	@echo "🏗️ Building for Raspberry Pi (ARM64)..."
 	GOARCH=arm64 CGO_ENABLED=0 sh build.sh build
+
+build_legacy:
+	@echo "🏗️ Building legacy static binary for x86_64 (CGO_ENABLED=0)..."
+	CGO_ENABLED=0 GOARCH=amd64 go build -tags "osusergo netgo static_build" \
+		-trimpath -ldflags="-s -w -X \"github.com/themadorg/madmail/framework/config.Version=$$(cat .version)+$$(git rev-parse --short HEAD)\"" \
+		-o $(BINARY_AMD64_LEGACY) ./cmd/maddy
+	@echo "✅ Legacy binary: $(BINARY_AMD64_LEGACY) (statically linked, no GLIBC dependency)"
+
+build_all_with_legacy: build_all build_legacy
+	@echo "✅ All binaries built (amd64, amd64-legacy, arm64)"
 
 test:
 	uv run python3 tests/deltachat-test/main.py --lxc
@@ -84,6 +95,7 @@ publish: build_all
 sign_all: build_all
 	@echo "🔏 Signing binaries..."
 	@if [ -f $(BINARY_AMD64) ] && [ -n "$(PRIV_KEY)" ]; then uv run internal/cli/clitools/sign.py $(BINARY_AMD64) $(PRIV_KEY); fi
+	@if [ -f $(BINARY_AMD64_LEGACY) ] && [ -n "$(PRIV_KEY)" ]; then uv run internal/cli/clitools/sign.py $(BINARY_AMD64_LEGACY) $(PRIV_KEY); fi
 	@if [ -f $(BINARY_ARM64) ] && [ -n "$(PRIV_KEY)" ]; then uv run internal/cli/clitools/sign.py $(BINARY_ARM64) $(PRIV_KEY); fi
 	@if [ -f $(BINARY) ] && [ -n "$(PRIV_KEY)" ]; then uv run internal/cli/clitools/sign.py $(BINARY) $(PRIV_KEY); fi
 
