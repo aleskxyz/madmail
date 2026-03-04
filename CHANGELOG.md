@@ -1,3 +1,10 @@
+# [0.22.0](https://github.com/themadorg/madmail/compare/v0.21.0...v0.22.0) (2026-03-04)
+
+
+### Features
+
+* add admin notice API for sending emails to users ([286a9e7](https://github.com/themadorg/madmail/commit/286a9e7c83971ea3133c5ca3c0346fdc88e59c1b))
+
 # [0.21.0](https://github.com/themadorg/madmail/compare/v0.20.0...v0.21.0) (2026-03-04)
 
 
