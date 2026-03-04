@@ -109,6 +109,9 @@ type Endpoint struct {
 	adminToken string
 	adminPath  string
 
+	// Admin Web UI
+	adminWebPath string
+
 	// Shadowsocks configuration
 	ssAddr             string
 	ssPassword         string
@@ -157,6 +160,7 @@ func (e *Endpoint) Init(cfg *config.Map) error {
 	cfg.String("max_message_size", false, false, "32M", &e.maxMessageSize)
 	cfg.String("admin_token", false, false, "", &e.adminToken)
 	cfg.String("admin_path", false, false, "/api/admin", &e.adminPath)
+	cfg.String("admin_web_path", false, false, "", &e.adminWebPath)
 
 	// Get references to the authentication database and storage
 	var authDBName, storageName string
@@ -286,6 +290,29 @@ func (e *Endpoint) Init(cfg *config.Map) error {
 		if e.adminToken != "" {
 			e.setupAdminAPI()
 		}
+	}
+
+	// Admin Web UI: register routes if a path is configured.
+	// The enabled/disabled check happens per-request inside serveAdminWeb,
+	// so toggling via the Admin API takes effect immediately without restart.
+	adminWebPath := e.adminWebPath
+	if e.authDB != nil {
+		if val, ok, err := e.authDB.GetSetting(resources.KeyAdminWebPath); err == nil && ok && val != "" {
+			adminWebPath = val
+		}
+	}
+	if adminWebPath != "" {
+		// Ensure the path has proper format
+		if !strings.HasPrefix(adminWebPath, "/") {
+			adminWebPath = "/" + adminWebPath
+		}
+		adminWebPath = strings.TrimSuffix(adminWebPath, "/")
+		e.mux.HandleFunc(adminWebPath+"/", e.serveAdminWeb(adminWebPath))
+		// Also handle the exact path without trailing slash (redirect to with slash)
+		e.mux.HandleFunc(adminWebPath, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, adminWebPath+"/", http.StatusMovedPermanently)
+		})
+		e.logger.Printf("admin web UI registered at %s/", adminWebPath)
 	}
 
 	if e.enableContactSharing {
@@ -1589,6 +1616,8 @@ func (e *Endpoint) setupAdminAPI() {
 	handler.Register("/admin/settings/http_port", resources.GenericSettingHandler(resources.KeyHTTPPort, settingsDeps))
 	handler.Register("/admin/settings/https_port", resources.GenericSettingHandler(resources.KeyHTTPSPort, settingsDeps))
 	handler.Register("/admin/settings/admin_path", resources.GenericSettingHandler(resources.KeyAdminPath, settingsDeps))
+	handler.Register("/admin/settings/admin_web_path", resources.GenericSettingHandler(resources.KeyAdminWebPath, settingsDeps))
+	handler.Register("/admin/services/admin_web", resources.AdminWebHandler(settingsDeps))
 
 	handler.Register("/admin/accounts", resources.AccountsHandler(resources.AccountsDeps{
 		AuthDB:     e.authDB,

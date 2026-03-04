@@ -113,6 +113,12 @@ var configOverrides = []portMapping{
 		pattern:    regexp.MustCompile(`(chatmail\s+tls://0\.0\.0\.0:)\d+`),
 		replaceFmt: "${1}%s",
 	},
+	// Admin web path: matches 'admin_web_path <value>'
+	{
+		dbKey:      resources.KeyAdminWebPath,
+		pattern:    regexp.MustCompile(`(admin_web_path\s+)\S+`),
+		replaceFmt: "${1}%s",
+	},
 }
 
 // reloadConfig reads port/config overrides from the database, applies them
@@ -288,6 +294,8 @@ func (e *Endpoint) logDBOverrides() {
 		resources.KeyIrohEnabled,
 		resources.KeyLogDisabled,
 		resources.KeyAdminPath,
+		resources.KeyAdminWebPath,
+		resources.KeyAdminWebEnabled,
 	}
 	for _, key := range toggleKeys {
 		val, isSet, err := e.authDB.GetSetting(key)

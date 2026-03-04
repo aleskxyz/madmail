@@ -60,3 +60,7 @@ tmp/
 node_modules/
 dev/
 internal/endpoint/iroh/assets/iroh-relay
+
+# Admin web build files (copied by build.sh, embedded into binary)
+internal/adminweb/build/*
+!internal/adminweb/build/placeholder

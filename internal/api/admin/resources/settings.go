@@ -123,12 +123,13 @@ type settingValueResponse struct {
 // AllSettingsResponse is the response for GET /admin/settings.
 type AllSettingsResponse struct {
 	// Toggle settings
-	Registration    string `json:"registration"`     // "open" or "closed"
-	JitRegistration string `json:"jit_registration"` // "enabled" or "disabled"
-	TurnEnabled     string `json:"turn_enabled"`     // "enabled" or "disabled"
-	IrohEnabled     string `json:"iroh_enabled"`     // "enabled" or "disabled"
-	SsEnabled       string `json:"ss_enabled"`       // "enabled" or "disabled"
-	LogDisabled     string `json:"log_disabled"`     // "enabled" or "disabled"
+	Registration    string `json:"registration"`      // "open" or "closed"
+	JitRegistration string `json:"jit_registration"`  // "enabled" or "disabled"
+	TurnEnabled     string `json:"turn_enabled"`      // "enabled" or "disabled"
+	IrohEnabled     string `json:"iroh_enabled"`      // "enabled" or "disabled"
+	SsEnabled       string `json:"ss_enabled"`        // "enabled" or "disabled"
+	LogDisabled     string `json:"log_disabled"`      // "enabled" or "disabled"
+	AdminWebEnabled string `json:"admin_web_enabled"` // "enabled" or "disabled"
 
 	// Port settings
 	SMTPPort       settingValueResponse `json:"smtp_port"`
@@ -162,6 +163,7 @@ type AllSettingsResponse struct {
 	SsPassword     settingValueResponse `json:"ss_password"`
 	ShadowsocksURL string               `json:"shadowsocks_url"`
 	AdminPath      settingValueResponse `json:"admin_path"`
+	AdminWebPath   settingValueResponse `json:"admin_web_path"`
 }
 
 // Setting key constants for all configurable values.
@@ -172,6 +174,7 @@ const (
 	KeyLogDisabled            = "__LOG_DISABLED__"
 	KeyIrohEnabled            = "__IROH_ENABLED__"
 	KeySsEnabled              = "__SS_ENABLED__"
+	KeyAdminWebEnabled        = "__ADMIN_WEB_ENABLED__"
 
 	// Port settings
 	KeySMTPPort       = "__SMTP_PORT__"
@@ -204,6 +207,7 @@ const (
 	KeySsCipher     = "__SS_CIPHER__"
 	KeySsPassword   = "__SS_PASSWORD__"
 	KeyAdminPath    = "__ADMIN_PATH__"
+	KeyAdminWebPath = "__ADMIN_WEB_PATH__"
 )
 
 // RegistrationHandler creates a handler for /admin/registration.
@@ -380,6 +384,11 @@ func ShadowsocksHandler(deps SettingsToggleDeps) func(string, json.RawMessage) (
 	return genericDBToggleHandler(KeySsEnabled, deps)
 }
 
+// AdminWebHandler creates a handler for /admin/services/admin_web.
+func AdminWebHandler(deps SettingsToggleDeps) func(string, json.RawMessage) (interface{}, int, error) {
+	return genericDBToggleHandler(KeyAdminWebEnabled, deps)
+}
+
 // LogHandler creates a handler for /admin/services/log.
 func LogHandler(deps SettingsToggleDeps) func(string, json.RawMessage) (interface{}, int, error) {
 	return genericDBToggleHandler(KeyLogDisabled, deps)
@@ -492,6 +501,7 @@ func AllSettingsHandler(deps SettingsToggleDeps) func(string, json.RawMessage) (
 		resp.IrohEnabled = getToggle(KeyIrohEnabled)
 		resp.SsEnabled = getToggle(KeySsEnabled)
 		resp.LogDisabled = getToggle(KeyLogDisabled)
+		resp.AdminWebEnabled = getToggle(KeyAdminWebEnabled)
 
 		// String settings helper
 		getSetting := func(key string, activeVal string) settingValueResponse {
@@ -548,6 +558,7 @@ func AllSettingsHandler(deps SettingsToggleDeps) func(string, json.RawMessage) (
 		resp.SsCipher = getSetting(KeySsCipher, ssCiph)
 		resp.SsPassword = getSetting(KeySsPassword, ssPass)
 		resp.AdminPath = getSetting(KeyAdminPath, "")
+		resp.AdminWebPath = getSetting(KeyAdminWebPath, "")
 
 		return resp, 200, nil
 	}

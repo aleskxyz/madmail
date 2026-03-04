@@ -155,8 +155,42 @@ download_iroh_relay() {
 	echo "-- iroh-relay $LATEST_VERSION downloaded and prepared." >&2
 }
 
+copy_admin_web() {
+	ADMIN_WEB_SRC="admin-web"
+	ADMIN_WEB_BUILD="admin-web/build"
+	ADMIN_WEB_DEST="internal/adminweb/build"
+
+	# Build the frontend if package.json exists
+	if [ -f "$ADMIN_WEB_SRC/package.json" ]; then
+		if command -v bun >/dev/null 2>&1; then
+			echo "-- Building admin-web (bun)..." >&2
+			(cd "$ADMIN_WEB_SRC" && bun run build) >&2
+		elif command -v npm >/dev/null 2>&1; then
+			echo "-- Building admin-web (npm)..." >&2
+			(cd "$ADMIN_WEB_SRC" && npm run build) >&2
+		else
+			echo "-- [!] No bun or npm found. Skipping admin-web build." >&2
+		fi
+	fi
+
+	# Copy the build output for go:embed
+	if [ -d "$ADMIN_WEB_BUILD" ] && [ -f "$ADMIN_WEB_BUILD/index.html" ]; then
+		echo "-- Copying admin-web build to $ADMIN_WEB_DEST..." >&2
+		rm -rf "$ADMIN_WEB_DEST"
+		cp -r "$ADMIN_WEB_BUILD" "$ADMIN_WEB_DEST"
+	else
+		echo "-- [!] admin-web not built (no $ADMIN_WEB_BUILD/index.html). Admin web UI will not be available." >&2
+		# Ensure the placeholder directory exists for go:embed
+		mkdir -p "$ADMIN_WEB_DEST"
+		if [ ! -f "$ADMIN_WEB_DEST/placeholder" ]; then
+			echo "placeholder" > "$ADMIN_WEB_DEST/placeholder"
+		fi
+	fi
+}
+
 build() {
 	download_iroh_relay
+	copy_admin_web
 	mkdir -p "${builddir}"
 	echo "-- Version: ${version}" >&2
 	if [ "$(go env CC)" = "" ]; then
