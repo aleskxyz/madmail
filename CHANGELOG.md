@@ -1,3 +1,10 @@
+# [0.21.0](https://github.com/themadorg/madmail/compare/v0.20.0...v0.21.0) (2026-03-04)
+
+
+### Features
+
+* configurable admin web dashboard with toggle and CLI ([000b5df](https://github.com/themadorg/madmail/commit/000b5df4175af0599614e927269baed89f7c1ff2))
+
 # [0.20.0](https://github.com/themadorg/madmail/compare/v0.19.0...v0.20.0) (2026-03-03)
 
 
