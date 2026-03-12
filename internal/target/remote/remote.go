@@ -78,6 +78,13 @@ type Target struct {
 	// before falling back to the standard OS resolver.
 	endpointCache *endpoint_cache.Cache
 
+	// endpointRewrite, when non-empty, redirects all outbound HTTP
+	// deliveries to the specified URL instead of the recipient domain.
+	// If only an IP/host is given (e.g. "1.1.1.1"), /mxdeliv is appended.
+	// If a full URL with path is given (e.g. "https://1.1.1.1/custom"),
+	// the path is used as-is.
+	endpointRewrite string
+
 	policies          []module.MXAuthPolicy
 	limits            *limits.Group
 	allowSecOverride  bool
@@ -149,6 +156,7 @@ func (rt *Target) Init(cfg *config.Map) error {
 	cfg.Duration("connect_timeout", false, false, 5*time.Minute, &rt.connectTimeout)
 	cfg.Duration("command_timeout", false, false, 5*time.Minute, &rt.commandTimeout)
 	cfg.Duration("submission_timeout", false, false, 5*time.Minute, &rt.submissionTimeout)
+	cfg.String("endpoint_rewrite", false, false, "", &rt.endpointRewrite)
 
 	// Optional reference to the storage module for shared GORM database access.
 	// When set, the DNS cache table is stored in the same database as the
@@ -195,7 +203,10 @@ func (rt *Target) Init(cfg *config.Map) error {
 		}
 	}
 
-	// Initialize endpoint cache using the shared storage database.
+	// Initialize endpoint cache.
+	// First try the explicit storage module reference. If that's not set,
+	// auto-discover the "local_mailboxes" storage module from the
+	// global registry.
 	if storageName != "" {
 		storageInst, err := module.GetInstance(storageName)
 		if err != nil {
@@ -210,6 +221,24 @@ func (rt *Target) Init(cfg *config.Map) error {
 				rt.endpointCache = cache
 				rt.Log.Debugf("endpoint cache initialized from shared storage")
 			}
+		}
+	}
+	if rt.endpointCache == nil {
+		// Auto-discover: try the well-known "local_mailboxes" storage instance.
+		if storageInst, err := module.GetInstance("local_mailboxes"); err == nil {
+			if gormProvider, ok := storageInst.(module.GORMProvider); ok {
+				cache, cacheErr := endpoint_cache.New(gormProvider.GetGORMDB(), rt.Log)
+				if cacheErr != nil {
+					rt.Log.Error("endpoint cache: migration failed on auto-discovered storage", cacheErr)
+				} else {
+					rt.endpointCache = cache
+					rt.Log.Debugf("endpoint cache initialized from auto-discovered local_mailboxes")
+				}
+			} else {
+				rt.Log.DebugMsg("endpoint cache: local_mailboxes does not implement GORMProvider (non-fatal)")
+			}
+		} else {
+			rt.Log.DebugMsg("endpoint cache: local_mailboxes not found (non-fatal)", "err", err.Error())
 		}
 	}
 
@@ -540,9 +569,27 @@ func (rd *remoteDelivery) Close() error {
 }
 
 func (rd *remoteDelivery) tryHTTP(ctx context.Context, host string, rcpts []string, header textproto.Header, b buffer.Buffer) error {
+	// If an endpoint_rewrite is configured, deliver via the relay
+	// instead of directly to the recipient domain.
+	if rd.rt.endpointRewrite != "" {
+		url := rd.buildRewriteURL(rd.rt.endpointRewrite)
+		rd.Log.Msg("routing via endpoint rewrite", "url", url, "original_host", host)
+		return rd.doHTTPRequestURL(ctx, url, rcpts, header, b)
+	}
+
 	// Strip brackets if they exist
 	host = strings.TrimPrefix(host, "[")
 	host = strings.TrimSuffix(host, "]")
+
+	// Check endpoint cache for per-destination overrides.
+	// This allows routing specific destinations through a relay (e.g. exchanger).
+	if rd.rt.endpointCache != nil {
+		resolved, err := rd.rt.endpointCache.Resolve(ctx, host)
+		if err == nil && resolved != "" && resolved != host {
+			rd.Log.Msg("endpoint cache override for HTTP delivery", "original", host, "target", resolved)
+			host = resolved
+		}
+	}
 
 	// If it's an IPv6 address, it must be enclosed in brackets for the URL
 	if strings.Contains(host, ":") {
@@ -558,8 +605,40 @@ func (rd *remoteDelivery) tryHTTP(ctx context.Context, host string, rcpts []stri
 	return rd.doHTTPRequest(ctx, "http", host, rcpts, header, b)
 }
 
+// buildRewriteURL normalises the endpoint_rewrite value into a full URL.
+//
+// Rules:
+//   - "1.1.1.1"                  → "https://1.1.1.1/mxdeliv"
+//   - "https://1.1.1.1"          → "https://1.1.1.1/mxdeliv"
+//   - "https://1.1.1.1/custom"   → "https://1.1.1.1/custom"  (path kept)
+//   - "http://relay.example.com" → "http://relay.example.com/mxdeliv"
+func (rd *remoteDelivery) buildRewriteURL(raw string) string {
+	// If no scheme, assume https://
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+
+	// Split into scheme+host and path.
+	// e.g. "https://1.1.1.1/custom" → parts[0]="https:", parts[1]="", parts[2]="1.1.1.1/custom"
+	// Simpler: find the first '/' after "://"
+	afterScheme := raw[strings.Index(raw, "://")+3:]
+	slashIdx := strings.Index(afterScheme, "/")
+	if slashIdx == -1 || afterScheme[slashIdx:] == "/" {
+		// No path or just trailing slash — append /mxdeliv
+		raw = strings.TrimRight(raw, "/") + "/mxdeliv"
+	}
+	// else: user specified a custom path, keep it as-is
+
+	return raw
+}
+
 func (rd *remoteDelivery) doHTTPRequest(ctx context.Context, scheme, host string, rcpts []string, header textproto.Header, b buffer.Buffer) error {
 	url := scheme + "://" + host + "/mxdeliv"
+	return rd.doHTTPRequestURL(ctx, url, rcpts, header, b)
+}
+
+// doHTTPRequestURL performs the actual HTTP POST to deliver a message.
+func (rd *remoteDelivery) doHTTPRequestURL(ctx context.Context, url string, rcpts []string, header textproto.Header, b buffer.Buffer) error {
 	rd.Log.Msg("Attempting HTTP POST", "url", url, "from", rd.mailFrom)
 
 	bodyR, err := b.Open()
