@@ -1,3 +1,10 @@
+## [0.24.1](https://github.com/themadorg/madmail/compare/v0.24.0...v0.24.1) (2026-03-12)
+
+
+### Bug Fixes
+
+* **remote:** use DB module discovery instead of direct SQLite for endpoint cache ([c7a7c67](https://github.com/themadorg/madmail/commit/c7a7c67b8a1d67a57e64ec4ea5ed6851312127bd))
+
 # [0.24.0](https://github.com/themadorg/madmail/compare/v0.23.0...v0.24.0) (2026-03-05)
 
 
