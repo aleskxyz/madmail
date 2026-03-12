@@ -4,3 +4,6 @@
 [submodule "admin-web"]
 	path = admin-web
 	url = git@github.com:themadorg/madmail-admin-web.git
+[submodule "madexchanger"]
+	path = madexchanger
+	url = git@github.com:themadorg/madexchanger.git
