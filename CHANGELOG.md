@@ -1,3 +1,10 @@
+# [0.25.0](https://github.com/themadorg/madmail/compare/v0.24.1...v0.25.0) (2026-03-12)
+
+
+### Features
+
+* add madexchanger submodule, exchanger E2E tests, and postgres docs ([b644783](https://github.com/themadorg/madmail/commit/b6447831945c525f557cbfbd4aae95cb87adc92e))
+
 ## [0.24.1](https://github.com/themadorg/madmail/compare/v0.24.0...v0.24.1) (2026-03-12)
 
 
