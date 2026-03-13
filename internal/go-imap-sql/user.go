@@ -117,13 +117,34 @@ func (u *User) GetMailbox(name string, readOnly bool, conn backend.Conn) (*imap.
 	mbox.readOnly = readOnly
 
 	if conn == nil {
-		uids, recent, err := mbox.readUids()
-		if err != nil {
-			u.parent.logUserErr(u, err, "GetMailbox", name)
-			return nil, nil, wrapErrf(err, "GetMailbox %s", name)
-		}
+		/*
+			uids, recent, err := mbox.readUids()
+			if err != nil {
+				u.parent.logUserErr(u, err, "GetMailbox", name)
+				return nil, nil, wrapErrf(err, "GetMailbox %s", name)
+			}
 
-		mbox.handle = u.parent.mngr.ManagementHandle(mbox.id, uids, recent)
+			mbox.handle = u.parent.mngr.ManagementHandle(mbox.id, uids, recent)
+		*/
+
+		// For non-interactive sessions (conn == nil) uids are not used so it's not necessary to retrieve them
+		// from db for every single message that is stored.
+		//
+		// All the methods that use uidMap (Sync, ResolveSeq, UidAsSeq, MsgsCount) have conn == nil guards or are
+		// only called from IMAP command handlers that require an active connection. Specifically:
+		//  - Sync: returns immediately if conn == nil (go-imap-mess/mailbox.go:171)
+		//  - FlagsChanged: returns immediately if conn == nil (go-imap-mess/mailbox.go:310)
+		//  - Removed/RemovedSet: return immediately if conn == nil
+		//    (go-imap-mess/mailbox.go:354, go-imap-mess/mailbox.go:378)
+		//  - Close: returns nil if conn == nil (go-imap-mess/mailbox.go:398)
+		//  - ResolveSeq: only called from FETCH (fetch.go:50), STORE (flags.go:48),
+		//    MOVE (go-imap-sql/mailbox.go:499), COPY (go-imap-sql/mailbox.go:609),
+		//    EXPUNGE (go-imap-sql/mailbox.go:650)
+		//  - UidAsSeq: only called from FETCH (fetch.go:168), SEARCH (search.go:97,268),
+		//    SORT/THREAD (sortthread.go:66,282)
+		//  - ResolveCriteria — only called from SEARCH (search.go:23)
+		//  - MsgsCount: only called from SEARCH (search.go:187)
+		mbox.handle = u.parent.mngr.ManagementHandle(mbox.id, nil, nil)
 		return nil, mbox, nil
 	}
 
