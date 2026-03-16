@@ -66,6 +66,7 @@ var portKeys = map[string]bool{
 	KeySMTPPort: true, KeySubmissionPort: true, KeyIMAPPort: true,
 	KeyTurnPort: true, KeySaslPort: true, KeyIrohPort: true, KeySsPort: true,
 	KeyHTTPPort: true, KeyHTTPSPort: true,
+	KeySsWsPort: true, KeySsGrpcPort: true,
 }
 
 // safeValuePattern matches values that are safe to insert into maddy.conf.
@@ -139,6 +140,8 @@ type AllSettingsResponse struct {
 	SaslPort       settingValueResponse `json:"sasl_port"`
 	IrohPort       settingValueResponse `json:"iroh_port"`
 	SsPort         settingValueResponse `json:"ss_port"`
+	SsWsPort       settingValueResponse `json:"ss_ws_port"`
+	SsGrpcPort     settingValueResponse `json:"ss_grpc_port"`
 	HTTPPort       settingValueResponse `json:"http_port"`
 	HTTPSPort      settingValueResponse `json:"https_port"`
 
@@ -162,6 +165,18 @@ type AllSettingsResponse struct {
 	SsCipher       settingValueResponse `json:"ss_cipher"`
 	SsPassword     settingValueResponse `json:"ss_password"`
 	ShadowsocksURL string               `json:"shadowsocks_url"`
+
+	// Proxy toggle settings
+	SsWsEnabled       string `json:"ss_ws_enabled"`        // "enabled" or "disabled"
+	SsGrpcEnabled     string `json:"ss_grpc_enabled"`      // "enabled" or "disabled"
+	HTTPProxyEnabled  string `json:"http_proxy_enabled"`   // "enabled" or "disabled"
+
+	// HTTP Proxy settings
+	HTTPProxyPort     settingValueResponse `json:"http_proxy_port"`
+	HTTPProxyPath     settingValueResponse `json:"http_proxy_path"`
+	HTTPProxyUsername settingValueResponse `json:"http_proxy_username"`
+	HTTPProxyPassword settingValueResponse `json:"http_proxy_password"`
+
 	AdminPath      settingValueResponse `json:"admin_path"`
 	AdminWebPath   settingValueResponse `json:"admin_web_path"`
 }
@@ -174,6 +189,9 @@ const (
 	KeyLogDisabled            = "__LOG_DISABLED__"
 	KeyIrohEnabled            = "__IROH_ENABLED__"
 	KeySsEnabled              = "__SS_ENABLED__"
+	KeySsWsEnabled            = "__SS_WS_ENABLED__"
+	KeySsGrpcEnabled          = "__SS_GRPC_ENABLED__"
+	KeyHTTPProxyEnabled       = "__HTTP_PROXY_ENABLED__"
 	KeyAdminWebEnabled        = "__ADMIN_WEB_ENABLED__"
 
 	// Port settings
@@ -184,8 +202,11 @@ const (
 	KeySaslPort       = "__SASL_PORT__"
 	KeyIrohPort       = "__IROH_PORT__"
 	KeySsPort         = "__SS_PORT__"
+	KeySsWsPort       = "__SS_WS_PORT__"
+	KeySsGrpcPort     = "__SS_GRPC_PORT__"
 	KeyHTTPPort       = "__HTTP_PORT__"
 	KeyHTTPSPort      = "__HTTPS_PORT__"
+	KeyHTTPProxyPort  = "__HTTP_PROXY_PORT__"
 
 	// Per-port access control ("true" = local only, default unset = public)
 	KeySMTPLocalOnly       = "__SMTP_LOCAL_ONLY__"
@@ -198,16 +219,19 @@ const (
 	KeyHTTPSLocalOnly      = "__HTTPS_LOCAL_ONLY__"
 
 	// Configuration settings
-	KeySMTPHostname = "__SMTP_HOSTNAME__"
-	KeyTurnRealm    = "__TURN_REALM__"
-	KeyTurnSecret   = "__TURN_SECRET__"
-	KeyTurnRelayIP  = "__TURN_RELAY_IP__"
-	KeyTurnTTL      = "__TURN_TTL__"
-	KeyIrohRelayURL = "__IROH_RELAY_URL__"
-	KeySsCipher     = "__SS_CIPHER__"
-	KeySsPassword   = "__SS_PASSWORD__"
-	KeyAdminPath    = "__ADMIN_PATH__"
-	KeyAdminWebPath = "__ADMIN_WEB_PATH__"
+	KeySMTPHostname       = "__SMTP_HOSTNAME__"
+	KeyTurnRealm          = "__TURN_REALM__"
+	KeyTurnSecret         = "__TURN_SECRET__"
+	KeyTurnRelayIP        = "__TURN_RELAY_IP__"
+	KeyTurnTTL            = "__TURN_TTL__"
+	KeyIrohRelayURL       = "__IROH_RELAY_URL__"
+	KeySsCipher           = "__SS_CIPHER__"
+	KeySsPassword         = "__SS_PASSWORD__"
+	KeyHTTPProxyPath      = "__HTTP_PROXY_PATH__"
+	KeyHTTPProxyUsername  = "__HTTP_PROXY_USERNAME__"
+	KeyHTTPProxyPassword  = "__HTTP_PROXY_PASSWORD__"
+	KeyAdminPath          = "__ADMIN_PATH__"
+	KeyAdminWebPath       = "__ADMIN_WEB_PATH__"
 )
 
 // RegistrationHandler creates a handler for /admin/registration.
@@ -389,6 +413,21 @@ func AdminWebHandler(deps SettingsToggleDeps) func(string, json.RawMessage) (int
 	return genericDBToggleHandler(KeyAdminWebEnabled, deps)
 }
 
+// SsWsHandler creates a handler for /admin/services/ss_ws.
+func SsWsHandler(deps SettingsToggleDeps) func(string, json.RawMessage) (interface{}, int, error) {
+	return genericDBToggleHandler(KeySsWsEnabled, deps)
+}
+
+// SsGrpcHandler creates a handler for /admin/services/ss_grpc.
+func SsGrpcHandler(deps SettingsToggleDeps) func(string, json.RawMessage) (interface{}, int, error) {
+	return genericDBToggleHandler(KeySsGrpcEnabled, deps)
+}
+
+// HTTPProxyHandler creates a handler for /admin/services/http_proxy.
+func HTTPProxyHandler(deps SettingsToggleDeps) func(string, json.RawMessage) (interface{}, int, error) {
+	return genericDBToggleHandler(KeyHTTPProxyEnabled, deps)
+}
+
 // LogHandler creates a handler for /admin/services/log.
 func LogHandler(deps SettingsToggleDeps) func(string, json.RawMessage) (interface{}, int, error) {
 	return genericDBToggleHandler(KeyLogDisabled, deps)
@@ -500,6 +539,9 @@ func AllSettingsHandler(deps SettingsToggleDeps) func(string, json.RawMessage) (
 		}
 		resp.IrohEnabled = getToggle(KeyIrohEnabled)
 		resp.SsEnabled = getToggle(KeySsEnabled)
+		resp.SsWsEnabled = getToggle(KeySsWsEnabled)
+		resp.SsGrpcEnabled = getToggle(KeySsGrpcEnabled)
+		resp.HTTPProxyEnabled = getToggle(KeyHTTPProxyEnabled)
 		resp.LogDisabled = getToggle(KeyLogDisabled)
 		resp.AdminWebEnabled = getToggle(KeyAdminWebEnabled)
 
@@ -528,6 +570,8 @@ func AllSettingsHandler(deps SettingsToggleDeps) func(string, json.RawMessage) (
 		resp.SaslPort = getSetting(KeySaslPort, "")
 		resp.IrohPort = getSetting(KeyIrohPort, "")
 		resp.SsPort = getSetting(KeySsPort, ssPort)
+		resp.SsWsPort = getSetting(KeySsWsPort, "")
+		resp.SsGrpcPort = getSetting(KeySsGrpcPort, "")
 		resp.HTTPPort = getSetting(KeyHTTPPort, "")
 		resp.HTTPSPort = getSetting(KeyHTTPSPort, "")
 
@@ -557,6 +601,10 @@ func AllSettingsHandler(deps SettingsToggleDeps) func(string, json.RawMessage) (
 		resp.IrohRelayURL = getSetting(KeyIrohRelayURL, "")
 		resp.SsCipher = getSetting(KeySsCipher, ssCiph)
 		resp.SsPassword = getSetting(KeySsPassword, ssPass)
+		resp.HTTPProxyPort = getSetting(KeyHTTPProxyPort, "")
+		resp.HTTPProxyPath = getSetting(KeyHTTPProxyPath, "")
+		resp.HTTPProxyUsername = getSetting(KeyHTTPProxyUsername, "")
+		resp.HTTPProxyPassword = getSetting(KeyHTTPProxyPassword, "")
 		resp.AdminPath = getSetting(KeyAdminPath, "")
 		resp.AdminWebPath = getSetting(KeyAdminWebPath, "")
 

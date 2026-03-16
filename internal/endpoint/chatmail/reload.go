@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/themadorg/madmail/framework/config"
@@ -244,13 +243,14 @@ func findConfigPath() string {
 	return ""
 }
 
-// restartService schedules a SIGTERM to the current process after a short delay.
+// restartService schedules a process exit after a short delay.
 // The delay allows the HTTP response to be sent before the process terminates.
-// The systemd unit uses Restart=always, so systemd will restart the service
-// with the newly written config file.
+// We use exit code 3 (not 0, not 2) so that systemd's Restart=on-failure
+// treats it as a failure and restarts the service. Exit code 2 is excluded
+// by RestartPreventExitStatus=2 (reserved for config parse errors).
 func restartService() error {
 	time.AfterFunc(500*time.Millisecond, func() {
-		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+		os.Exit(3)
 	})
 	return nil
 }

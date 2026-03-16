@@ -36,6 +36,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -50,10 +51,31 @@ import (
 	adminapi "github.com/themadorg/madmail/internal/api/admin"
 	"github.com/themadorg/madmail/internal/api/admin/resources"
 	"github.com/themadorg/madmail/internal/auth/pass_table"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/shadowsocks/go-shadowsocks2/core"
 	"github.com/shadowsocks/go-shadowsocks2/socks"
+
+	// Xray-core: embedded QUIC transport for Shadowsocks
+	xcore "github.com/xtls/xray-core/core"
+	xlog "github.com/xtls/xray-core/app/log"
+	xclog "github.com/xtls/xray-core/common/log"
+	"github.com/xtls/xray-core/app/dispatcher"
+	"github.com/xtls/xray-core/app/proxyman"
+	_ "github.com/xtls/xray-core/app/proxyman/inbound"
+	_ "github.com/xtls/xray-core/app/proxyman/outbound"
+	xnet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/platform/filesystem"
+	"github.com/xtls/xray-core/common/protocol"
+	"github.com/xtls/xray-core/common/serial"
+	// "github.com/xtls/xray-core/proxy/dokodemo" -- no longer used; WS and gRPC use native SS inbound
+	"github.com/xtls/xray-core/proxy/blackhole"
+	"github.com/xtls/xray-core/proxy/freedom"
+	xss "github.com/xtls/xray-core/proxy/shadowsocks"
+	"github.com/xtls/xray-core/app/router"
+	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/grpc"
+	xtls "github.com/xtls/xray-core/transport/internet/tls"
+	"github.com/xtls/xray-core/transport/internet/websocket"
 
 	mdb "github.com/themadorg/madmail/internal/db"
 	"gorm.io/gorm"
@@ -118,6 +140,10 @@ type Endpoint struct {
 	ssCipher           string
 	ssAllowedPortsList []string
 	ssAllowedPorts     map[string]bool
+
+	// Shadowsocks QUIC transport (v2ray-plugin)
+	ssCertPath string
+	ssKeyPath  string
 }
 
 type AccountResponse struct {
@@ -153,6 +179,8 @@ func (e *Endpoint) Init(cfg *config.Map) error {
 	cfg.String("ss_addr", false, false, "", &e.ssAddr)
 	cfg.String("ss_password", false, false, "", &e.ssPassword)
 	cfg.String("ss_cipher", false, false, "aes-128-gcm", &e.ssCipher)
+	cfg.String("ss_cert", false, false, "", &e.ssCertPath)
+	cfg.String("ss_key", false, false, "", &e.ssKeyPath)
 	allowedPortsList := []string{"3478", "5349"} // Default TURN ports
 	cfg.StringList("ss_allowed_ports", false, false, nil, &e.ssAllowedPortsList)
 	cfg.String("sharing_driver", false, false, "sqlite3", &e.sharingDriver)
@@ -502,10 +530,8 @@ func (e *Endpoint) handleNewAccount(w http.ResponseWriter, r *http.Request) {
 
 		// Create user in authentication database
 		if authHash, ok := e.authDB.(*pass_table.Auth); ok {
-			// Use bcrypt for password hashing
-			err = authHash.CreateUserHash(email, password, "bcrypt", pass_table.HashOpts{
-				BcryptCost: bcrypt.DefaultCost,
-			})
+			// Use SHA256 for password hashing (fast, sufficient for server-generated passwords)
+			err = authHash.CreateUserHash(email, password, pass_table.DefaultHash, pass_table.HashOpts{})
 		} else {
 			err = e.authDB.CreateUser(email, password)
 		}
@@ -641,6 +667,7 @@ func (e *Endpoint) handleStaticFiles(w http.ResponseWriter, r *http.Request) {
 		tmpl, err := template.New(path).Funcs(template.FuncMap{
 			"upper":       strings.ToUpper,
 			"safeURL":     func(s string) template.URL { return template.URL(s) },
+			"safeHTML":    func(s string) template.HTML { return template.HTML(s) },
 			"cleanDomain": func(s string) string { return strings.Trim(s, "[]") },
 			"formatBytes": formatBytes,
 		}).Parse(string(fileData))
@@ -659,6 +686,10 @@ func (e *Endpoint) handleStaticFiles(w http.ResponseWriter, r *http.Request) {
 			TurnOffTLS             bool
 			Version                string
 			SSURL                  string
+			SSGrpcURL              string
+			SSWsURL                string
+			V2rayNGConfigWS        string
+			V2rayNGConfigGRPC      string
 			STUNAddr               string
 			DefaultQuota           int64
 			MaxMessageSize         string
@@ -673,6 +704,10 @@ func (e *Endpoint) handleStaticFiles(w http.ResponseWriter, r *http.Request) {
 			TurnOffTLS:             e.turnOffTLS,
 			Version:                config.Version,
 			SSURL:                  e.getShadowsocksURL(r.Host),
+			SSGrpcURL:              e.getShadowsocksGrpcURL(r.Host),
+			SSWsURL:                e.getShadowsocksWsURL(r.Host),
+			V2rayNGConfigWS:        e.getV2rayNGConfigWS(r.Host),
+			V2rayNGConfigGRPC:      e.getV2rayNGConfigGRPC(r.Host),
 			STUNAddr:               net.JoinHostPort(strings.Trim(e.webDomain, "[]"), "3478"),
 			DefaultQuota:           e.storage.GetDefaultQuota(),
 			MaxMessageSize:         e.maxMessageSize,
@@ -929,6 +964,53 @@ func (e *Endpoint) isShadowsocksEnabled() bool {
 	return val != "false"
 }
 
+// isWsEnabled checks the __SS_WS_ENABLED__ setting in the database.
+// Defaults to true if not set.
+func (e *Endpoint) isWsEnabled() bool {
+	val, ok, err := e.authDB.GetSetting(resources.KeySsWsEnabled)
+	if err != nil || !ok {
+		return true // default enabled
+	}
+	return val != "false"
+}
+
+// isGrpcEnabled checks the __SS_GRPC_ENABLED__ setting in the database.
+// Defaults to true if not set.
+func (e *Endpoint) isGrpcEnabled() bool {
+	val, ok, err := e.authDB.GetSetting(resources.KeySsGrpcEnabled)
+	if err != nil || !ok {
+		return true // default enabled
+	}
+	return val != "false"
+}
+
+// resolveSSTlsPaths returns the TLS certificate and key paths for SS transports.
+// Falls back from state_dir/certs to /etc/maddy/certs if the primary doesn't exist.
+func (e *Endpoint) resolveSSTlsPaths() (certPath, keyPath string) {
+	certPath = e.ssCertPath
+	keyPath = e.ssKeyPath
+	if certPath == "" {
+		certPath = filepath.Join(config.StateDirectory, "certs", "fullchain.pem")
+		// Fallback: try /etc/maddy/certs/ if stat_dir doesn't have the cert
+		if _, err := os.Stat(certPath); os.IsNotExist(err) {
+			alt := "/etc/maddy/certs/fullchain.pem"
+			if _, err2 := os.Stat(alt); err2 == nil {
+				certPath = alt
+			}
+		}
+	}
+	if keyPath == "" {
+		keyPath = filepath.Join(config.StateDirectory, "certs", "privkey.pem")
+		if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+			alt := "/etc/maddy/certs/privkey.pem"
+			if _, err2 := os.Stat(alt); err2 == nil {
+				keyPath = alt
+			}
+		}
+	}
+	return
+}
+
 func (e *Endpoint) runShadowsocks() {
 	shadowsocksOnce.Do(func() {
 		e.runShadowsocksInternal()
@@ -942,67 +1024,366 @@ func (e *Endpoint) runShadowsocksInternal() {
 		return
 	}
 
-	l, err := net.Listen("tcp", e.ssAddr)
+	// Raw TCP Shadowsocks on the configured public port (for Delta Chat
+	// and other clients that don't use v2ray-plugin transports).
+	publicListener, err := net.Listen("tcp", e.ssAddr)
 	if err != nil {
-		e.logger.Error("Shadowsocks: failed to listen", err)
+		e.logger.Error("Shadowsocks: failed to listen on public port", err)
 		return
 	}
-	defer l.Close()
 
-	e.logger.Printf("Shadowsocks: listening on %s (cipher: %s)", e.ssAddr, e.ssCipher)
+	e.logger.Printf("Shadowsocks: raw TCP on %s (cipher: %s)", e.ssAddr, e.ssCipher)
 
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			e.logger.Error("Shadowsocks: accept failed", err)
-			continue
+	// Accept loop for the raw TCP SS handler
+	go func() {
+		for {
+			conn, err := publicListener.Accept()
+			if err != nil {
+				if !errors.Is(err, net.ErrClosed) {
+					e.logger.Error("Shadowsocks: accept failed", err)
+				}
+				return
+			}
+
+			go func(conn net.Conn) {
+				defer conn.Close()
+				if !e.isShadowsocksEnabled() {
+					return
+				}
+				cConn := ciph.StreamConn(conn)
+				tgtAddr, err := socks.ReadAddr(cConn)
+				if err != nil {
+					e.logger.Error("Shadowsocks: failed to read target address", err)
+					return
+				}
+
+				tgtHost, tgtPort, err := net.SplitHostPort(tgtAddr.String())
+				if err != nil {
+					e.logger.Error("Shadowsocks: failed to split host:port", err, "addr", tgtAddr.String())
+					return
+				}
+
+				if !e.ssAllowedPorts[tgtPort] {
+					e.logger.Msg("Shadowsocks: blocking unauthorized port", "port", tgtPort, "host", tgtHost)
+					return
+				}
+
+				localAddr := net.JoinHostPort("127.0.0.1", tgtPort)
+				e.logger.Msg("Shadowsocks: relaying", "from", conn.RemoteAddr(), "to", localAddr)
+
+				remote, err := net.Dial("tcp", localAddr)
+				if err != nil {
+					e.logger.Error("Shadowsocks: failed to connect to local port", err, "addr", localAddr)
+					return
+				}
+				defer remote.Close()
+
+				go func() { _, _ = io.Copy(remote, cConn) }()
+				_, _ = io.Copy(cConn, remote)
+			}(conn)
 		}
+	}()
 
-		go func(conn net.Conn) {
-			defer conn.Close()
-			// Check if SS is still enabled (can be toggled via admin API)
-			if !e.isShadowsocksEnabled() {
-				return
-			}
-			cConn := ciph.StreamConn(conn)
-			tgtAddr, err := socks.ReadAddr(cConn)
-			if err != nil {
-				e.logger.Error("Shadowsocks: failed to read target address", err)
-				return
-			}
-
-			tgtHost, tgtPort, err := net.SplitHostPort(tgtAddr.String())
-			if err != nil {
-				// Address might be just a port or something else, try to handle it
-				e.logger.Error("Shadowsocks: failed to split host:port", err, "addr", tgtAddr.String())
-				return
-			}
-
-			// Restrict to allowed ports
-			if !e.ssAllowedPorts[tgtPort] {
-				e.logger.Msg("Shadowsocks: blocking unauthorized port", "port", tgtPort, "host", tgtHost)
-				return
-			}
-
-			// Restrict relaying ONLY to the local machine ports.
-			// This prevents the proxy from being used to reach other servers.
-			// Users MUST use the proxy of the server they are registered on.
-			localAddr := net.JoinHostPort("127.0.0.1", tgtPort)
-			e.logger.Msg("Shadowsocks: relaying", "from", conn.RemoteAddr(), "to", localAddr)
-
-			remote, err := net.Dial("tcp", localAddr)
-			if err != nil {
-				e.logger.Error("Shadowsocks: failed to connect to local port", err, "addr", localAddr)
-				return
-			}
-			defer remote.Close()
-
-			go func() {
-				_, _ = io.Copy(remote, cConn)
-			}()
-			_, _ = io.Copy(cConn, remote)
-		}(conn)
+	// Additionally, start the embedded Xray-core transports:
+	// - gRPC on SS port + 1 (e.g. 8389) for v2ray-plugin gRPC clients
+	// - WebSocket on SS port + 2 (e.g. 8390) for v2ray-plugin WS clients
+	// Both forward to the raw TCP SS handler, keeping it for Delta Chat.
+	_, ssPortStr, err := net.SplitHostPort(e.ssAddr)
+	if err == nil {
+		ssPort, _ := strconv.ParseUint(ssPortStr, 10, 32)
+		grpcPort := int(ssPort) + 1
+		wsPort := int(ssPort) + 2
+		if e.isGrpcEnabled() {
+			go e.runXrayGRPC(grpcPort)
+		} else {
+			e.logger.Printf("Shadowsocks gRPC transport disabled via admin setting")
+		}
+		if e.isWsEnabled() {
+			go e.runXrayWS(wsPort)
+		} else {
+			e.logger.Printf("Shadowsocks WebSocket transport disabled via admin setting")
+		}
 	}
+}
+
+// runXrayGRPC starts an embedded Xray-core instance that listens on the
+// given port with gRPC transport (over TLS) and forwards to the raw TCP
+// Shadowsocks server on e.ssAddr. This gives v2ray-plugin clients an
+// obfuscated endpoint while the main SS port stays raw TCP for Delta Chat.
+func (e *Endpoint) runXrayGRPC(grpcListenPort int) {
+	// Resolve the listen host from the SS address
+	ssHost, _, err := net.SplitHostPort(e.ssAddr)
+	if err != nil {
+		e.logger.Error("Shadowsocks gRPC: invalid ss_addr", err)
+		return
+	}
+	if ssHost == "" {
+		ssHost = "0.0.0.0"
+	}
+
+	// Read SS credentials
+	password, cipher := e.ssPassword, e.ssCipher
+	if e.authDB != nil {
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsPassword); err == nil && ok && v != "" {
+			password = v
+		}
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsCipher); err == nil && ok && v != "" {
+			cipher = v
+		}
+	}
+
+	var cipherType xss.CipherType
+	switch strings.ToUpper(cipher) {
+	case "AES-128-GCM":
+		cipherType = xss.CipherType_AES_128_GCM
+	case "AES-256-GCM":
+		cipherType = xss.CipherType_AES_256_GCM
+	case "CHACHA20-IETF-POLY1305":
+		cipherType = xss.CipherType_CHACHA20_POLY1305
+	default:
+		e.logger.Error("Shadowsocks gRPC: unsupported cipher for Xray", nil, "cipher", cipher)
+		return
+	}
+
+	ssAccount := &xss.Account{
+		Password:   password,
+		CipherType: cipherType,
+	}
+
+	// Resolve TLS cert/key paths.
+	certPath, keyPath := e.resolveSSTlsPaths()
+
+	certData, err := filesystem.ReadFile(certPath)
+	if err != nil {
+		e.logger.Error("Shadowsocks gRPC: failed to read TLS cert", err, "path", certPath)
+		return
+	}
+	keyData, err := filesystem.ReadFile(keyPath)
+	if err != nil {
+		e.logger.Error("Shadowsocks gRPC: failed to read TLS key", err, "path", keyPath)
+		return
+	}
+
+	serverName := strings.Trim(e.mailDomain, "[]")
+	if e.publicIP != "" {
+		serverName = e.publicIP
+	}
+
+	tlsConfig := &xtls.Config{
+		ServerName: serverName,
+		Certificate: []*xtls.Certificate{{
+			Certificate: certData,
+			Key:         keyData,
+		}},
+	}
+
+	grpcConfig := &grpc.Config{
+		ServiceName: "GunService",
+	}
+
+	streamConfig := &internet.StreamConfig{
+		ProtocolName: "grpc",
+		TransportSettings: []*internet.TransportConfig{{
+			ProtocolName: "grpc",
+			Settings:     serial.ToTypedMessage(grpcConfig),
+		}},
+		SecurityType:     serial.GetMessageType(tlsConfig),
+		SecuritySettings: []*serial.TypedMessage{serial.ToTypedMessage(tlsConfig)},
+	}
+
+	xConfig := &xcore.Config{
+		Inbound: []*xcore.InboundHandlerConfig{{
+			ReceiverSettings: serial.ToTypedMessage(&proxyman.ReceiverConfig{
+				PortList:       &xnet.PortList{Range: []*xnet.PortRange{xnet.SinglePortRange(xnet.Port(grpcListenPort))}},
+				Listen:         xnet.NewIPOrDomain(xnet.ParseAddress(ssHost)),
+				StreamSettings: streamConfig,
+			}),
+			ProxySettings: serial.ToTypedMessage(&xss.ServerConfig{
+				Users: []*protocol.User{{
+					Account: serial.ToTypedMessage(ssAccount),
+				}},
+				Network: []xnet.Network{xnet.Network_TCP},
+			}),
+		}},
+		Outbound: []*xcore.OutboundHandlerConfig{
+			{
+				Tag: "allow",
+				ProxySettings: serial.ToTypedMessage(&freedom.Config{
+					DestinationOverride: &freedom.DestinationOverride{
+						Server: &protocol.ServerEndpoint{
+							Address: xnet.NewIPOrDomain(xnet.LocalHostIP),
+						},
+					},
+				}),
+			},
+			{
+				Tag:           "block",
+				ProxySettings: serial.ToTypedMessage(&blackhole.Config{}),
+			},
+		},
+		App: []*serial.TypedMessage{
+			serial.ToTypedMessage(&dispatcher.Config{}),
+			serial.ToTypedMessage(&proxyman.InboundConfig{}),
+			serial.ToTypedMessage(&proxyman.OutboundConfig{}),
+			serial.ToTypedMessage(e.buildSSPortRouting()),
+			serial.ToTypedMessage(&xlog.Config{
+				ErrorLogType:  xlog.LogType_None,
+				AccessLogType: xlog.LogType_None,
+			}),
+		},
+	}
+
+	if e.logger.Debug {
+		xConfig.App[4] = serial.ToTypedMessage(&xlog.Config{
+			ErrorLogType:  xlog.LogType_Console,
+			ErrorLogLevel: xclog.Severity_Debug,
+			AccessLogType: xlog.LogType_Console,
+		})
+	}
+
+	instance, err := xcore.New(xConfig)
+	if err != nil {
+		e.logger.Error("Shadowsocks gRPC: failed to create xray instance", err)
+		return
+	}
+
+	if err := instance.Start(); err != nil {
+		e.logger.Error("Shadowsocks gRPC: failed to start xray instance", err)
+		return
+	}
+
+	e.logger.Printf("Shadowsocks gRPC: listening on %s:%d (xray ss+grpc+tls, cipher=%s, cert=%s)", ssHost, grpcListenPort, cipher, certPath)
+
+	select {}
+}
+
+// runXrayWS starts an embedded Xray-core instance that listens on the
+// given port with WebSocket transport (over TLS) and forwards to the raw TCP
+// Shadowsocks server on e.ssAddr. This gives v2ray-plugin WS clients an
+// obfuscated endpoint while the main SS port stays raw TCP for Delta Chat.
+func (e *Endpoint) runXrayWS(wsListenPort int) {
+	// Resolve the listen host from the SS address
+	ssHost, _, err := net.SplitHostPort(e.ssAddr)
+	if err != nil {
+		e.logger.Error("Shadowsocks WS: invalid ss_addr", err)
+		return
+	}
+	if ssHost == "" {
+		ssHost = "0.0.0.0"
+	}
+
+	// Read SS credentials (same password/cipher as raw TCP handler)
+	password, cipher := e.ssPassword, e.ssCipher
+	if e.authDB != nil {
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsPassword); err == nil && ok && v != "" {
+			password = v
+		}
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsCipher); err == nil && ok && v != "" {
+			cipher = v
+		}
+	}
+
+	// Map cipher name to Xray enum
+	var cipherType xss.CipherType
+	switch strings.ToUpper(cipher) {
+	case "AES-128-GCM":
+		cipherType = xss.CipherType_AES_128_GCM
+	case "AES-256-GCM":
+		cipherType = xss.CipherType_AES_256_GCM
+	case "CHACHA20-IETF-POLY1305":
+		cipherType = xss.CipherType_CHACHA20_POLY1305
+	default:
+		e.logger.Error("Shadowsocks WS: unsupported cipher for Xray", nil, "cipher", cipher)
+		return
+	}
+
+	ssAccount := &xss.Account{
+		Password:   password,
+		CipherType: cipherType,
+	}
+
+	// Plain WebSocket transport (no TLS) — SS encryption provides security.
+	wsConfig := &websocket.Config{
+		Path: "/ss",
+	}
+
+	streamConfig := &internet.StreamConfig{
+		ProtocolName: "websocket",
+		TransportSettings: []*internet.TransportConfig{{
+			ProtocolName: "websocket",
+			Settings:     serial.ToTypedMessage(wsConfig),
+		}},
+	}
+
+	// Use Xray's native Shadowsocks inbound (NOT dokodemo).
+	// This ensures compatibility with Xray/v2ray-based clients (v2rayNG etc)
+	// which use Xray's own SS encryption that is NOT compatible with
+	// go-shadowsocks2's AEAD implementation.
+	xConfig := &xcore.Config{
+		Inbound: []*xcore.InboundHandlerConfig{{
+			ReceiverSettings: serial.ToTypedMessage(&proxyman.ReceiverConfig{
+				PortList:       &xnet.PortList{Range: []*xnet.PortRange{xnet.SinglePortRange(xnet.Port(wsListenPort))}},
+				Listen:         xnet.NewIPOrDomain(xnet.ParseAddress(ssHost)),
+				StreamSettings: streamConfig,
+			}),
+			ProxySettings: serial.ToTypedMessage(&xss.ServerConfig{
+				Users: []*protocol.User{{
+					Account: serial.ToTypedMessage(ssAccount),
+				}},
+				Network: []xnet.Network{xnet.Network_TCP},
+			}),
+		}},
+		// Outbound 'allow': forward to 127.0.0.1 (only for allowed ports)
+		Outbound: []*xcore.OutboundHandlerConfig{
+			{
+				Tag: "allow",
+				ProxySettings: serial.ToTypedMessage(&freedom.Config{
+					DestinationOverride: &freedom.DestinationOverride{
+						Server: &protocol.ServerEndpoint{
+							Address: xnet.NewIPOrDomain(xnet.LocalHostIP),
+						},
+					},
+				}),
+			},
+			{
+				Tag:           "block",
+				ProxySettings: serial.ToTypedMessage(&blackhole.Config{}),
+			},
+		},
+		App: []*serial.TypedMessage{
+			serial.ToTypedMessage(&dispatcher.Config{}),
+			serial.ToTypedMessage(&proxyman.InboundConfig{}),
+			serial.ToTypedMessage(&proxyman.OutboundConfig{}),
+			serial.ToTypedMessage(e.buildSSPortRouting()),
+			serial.ToTypedMessage(&xlog.Config{
+				ErrorLogType:  xlog.LogType_None,
+				AccessLogType: xlog.LogType_None,
+			}),
+		},
+	}
+
+	if e.logger.Debug {
+		xConfig.App[4] = serial.ToTypedMessage(&xlog.Config{
+			ErrorLogType:  xlog.LogType_Console,
+			ErrorLogLevel: xclog.Severity_Debug,
+			AccessLogType: xlog.LogType_Console,
+		})
+	}
+
+	instance, err := xcore.New(xConfig)
+	if err != nil {
+		e.logger.Error("Shadowsocks WS: failed to create xray instance", err)
+		return
+	}
+
+	if err := instance.Start(); err != nil {
+		e.logger.Error("Shadowsocks WS: failed to start xray instance", err)
+		return
+	}
+
+	e.logger.Printf("Shadowsocks WS: listening on %s:%d (xray ss+ws, cipher=%s)", ssHost, wsListenPort, cipher)
+
+	select {}
 }
 
 func (e *Endpoint) getShadowsocksURL(hostHint string) string {
@@ -1026,7 +1407,7 @@ func (e *Endpoint) getShadowsocksURL(hostHint string) string {
 		}
 	}
 
-	// format: ss://BASE64(method:password)@host:port#tag
+	// format: ss://BASE64(method:password)@host:port?plugin=...#tag
 	userInfo := fmt.Sprintf("%s:%s", cipher, password)
 	auth := base64.StdEncoding.EncodeToString([]byte(userInfo))
 	auth = strings.TrimRight(auth, "=")
@@ -1043,12 +1424,253 @@ func (e *Endpoint) getShadowsocksURL(hostHint string) string {
 		}
 	}
 
+	// Plain SS URL (raw TCP) — compatible with Delta Chat and all basic clients.
+	// The gRPC transport is available on port+1 for v2ray-plugin clients.
 	return fmt.Sprintf("ss://%s@%s:%s#%s", auth, host, port, url.QueryEscape(host))
+}
+
+// getShadowsocksGrpcURL returns the v2ray-plugin gRPC URL (port+1).
+func (e *Endpoint) getShadowsocksGrpcURL(hostHint string) string {
+	if e.ssAddr == "" || !e.isShadowsocksEnabled() || !e.isGrpcEnabled() {
+		return ""
+	}
+
+	password, cipher, port := e.ssPassword, e.ssCipher, ""
+	_, port, _ = net.SplitHostPort(e.ssAddr)
+
+	if e.authDB != nil {
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsPassword); err == nil && ok && v != "" {
+			password = v
+		}
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsCipher); err == nil && ok && v != "" {
+			cipher = v
+		}
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsPort); err == nil && ok && v != "" {
+			port = v
+		}
+	}
+
+	// gRPC port = SS port + 1
+	if p, err := strconv.Atoi(port); err == nil {
+		port = strconv.Itoa(p + 1)
+	}
+
+	userInfo := fmt.Sprintf("%s:%s", cipher, password)
+	auth := base64.StdEncoding.EncodeToString([]byte(userInfo))
+	auth = strings.TrimRight(auth, "=")
+
+	host, _, _ := net.SplitHostPort(e.ssAddr)
+	if host == "" || host == "0.0.0.0" {
+		host = hostHint
+		if host == "" {
+			host = strings.Trim(e.mailDomain, "[]")
+		} else {
+			if h, _, err := net.SplitHostPort(host); err == nil {
+				host = h
+			}
+		}
+	}
+
+	pluginOpts := url.QueryEscape(fmt.Sprintf("v2ray-plugin;mode=grpc;host=%s", host))
+	return fmt.Sprintf("ss://%s@%s:%s/?plugin=%s#%s", auth, host, port, pluginOpts, url.QueryEscape(host))
+}
+
+// getShadowsocksWsURL returns the v2ray-plugin WebSocket URL (port+2).
+func (e *Endpoint) getShadowsocksWsURL(hostHint string) string {
+	if e.ssAddr == "" || !e.isShadowsocksEnabled() || !e.isWsEnabled() {
+		return ""
+	}
+
+	password, cipher, port := e.ssPassword, e.ssCipher, ""
+	_, port, _ = net.SplitHostPort(e.ssAddr)
+
+	if e.authDB != nil {
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsPassword); err == nil && ok && v != "" {
+			password = v
+		}
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsCipher); err == nil && ok && v != "" {
+			cipher = v
+		}
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsPort); err == nil && ok && v != "" {
+			port = v
+		}
+	}
+
+	// WS port = SS port + 2
+	if p, err := strconv.Atoi(port); err == nil {
+		port = strconv.Itoa(p + 2)
+	}
+
+	userInfo := fmt.Sprintf("%s:%s", cipher, password)
+	auth := base64.StdEncoding.EncodeToString([]byte(userInfo))
+	auth = strings.TrimRight(auth, "=")
+
+	host, _, _ := net.SplitHostPort(e.ssAddr)
+	if host == "" || host == "0.0.0.0" {
+		host = hostHint
+		if host == "" {
+			host = strings.Trim(e.mailDomain, "[]")
+		} else {
+			if h, _, err := net.SplitHostPort(host); err == nil {
+				host = h
+			}
+		}
+	}
+
+	pluginOpts := url.QueryEscape(fmt.Sprintf("v2ray-plugin;mode=websocket;host=%s;path=/ss", host))
+	return fmt.Sprintf("ss://%s@%s:%s/?plugin=%s#%s", auth, host, port, pluginOpts, url.QueryEscape(host))
 }
 
 func (e *Endpoint) getShadowsocksActiveSettings() (password, cipher, port string) {
 	_, port, _ = net.SplitHostPort(e.ssAddr)
 	return e.ssPassword, e.ssCipher, port
+}
+
+// getAllowedPortsCSV returns a comma-separated list of allowed SS ports
+// for use in v2rayNG routing rules (e.g. "25,143,465,587,993,3478,5349").
+func (e *Endpoint) getAllowedPortsCSV() string {
+	ports := make([]string, 0, len(e.ssAllowedPorts))
+	for p := range e.ssAllowedPorts {
+		ports = append(ports, p)
+	}
+	return strings.Join(ports, ",")
+}
+
+// getV2rayNGConfigWS returns a v2rayNG-compatible JSON config for SS+WS transport.
+func (e *Endpoint) getV2rayNGConfigWS(hostHint string) string {
+	if !e.isWsEnabled() {
+		return ""
+	}
+	password, cipher, port := e.getShadowsocksActiveSettings()
+	if e.authDB != nil {
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsPassword); err == nil && ok && v != "" {
+			password = v
+		}
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsCipher); err == nil && ok && v != "" {
+			cipher = v
+		}
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsPort); err == nil && ok && v != "" {
+			port = v
+		}
+	}
+
+	wsPort := 0
+	if p, err := strconv.Atoi(port); err == nil {
+		wsPort = p + 2
+	}
+
+	host := e.resolveSSHost(hostHint)
+	allowedPorts := e.getAllowedPortsCSV()
+
+	return fmt.Sprintf(`{
+  "dns": {"servers": ["1.1.1.1", "8.8.8.8"]},
+  "inbounds": [{"listen": "127.0.0.1", "port": 10808, "protocol": "socks", "settings": {"auth": "noauth", "udp": true}, "sniffing": {"destOverride": ["http", "tls"], "enabled": true}, "tag": "socks"}],
+  "log": {"loglevel": "warning"},
+  "outbounds": [
+    {"protocol": "shadowsocks", "settings": {"servers": [{"address": "%s", "port": %d, "method": "%s", "password": "%s"}]}, "streamSettings": {"network": "ws", "wsSettings": {"path": "/ss", "headers": {"Host": "%s"}}}, "tag": "proxy"},
+    {"protocol": "freedom", "tag": "direct"},
+    {"protocol": "blackhole", "tag": "block"}
+  ],
+  "remarks": "%s (WS)",
+  "routing": {"domainStrategy": "IPIfNonMatch", "rules": [
+    {"outboundTag": "proxy", "port": "%s", "type": "field"},
+    {"outboundTag": "block", "port": "0-65535", "type": "field"}
+  ]}
+}`, host, wsPort, cipher, password, host, host, allowedPorts)
+}
+
+// getV2rayNGConfigGRPC returns a v2rayNG-compatible JSON config for SS+gRPC+TLS transport.
+func (e *Endpoint) getV2rayNGConfigGRPC(hostHint string) string {
+	if !e.isGrpcEnabled() {
+		return ""
+	}
+	password, cipher, port := e.getShadowsocksActiveSettings()
+	if e.authDB != nil {
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsPassword); err == nil && ok && v != "" {
+			password = v
+		}
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsCipher); err == nil && ok && v != "" {
+			cipher = v
+		}
+		if v, ok, err := e.authDB.GetSetting(resources.KeySsPort); err == nil && ok && v != "" {
+			port = v
+		}
+	}
+
+	grpcPort := 0
+	if p, err := strconv.Atoi(port); err == nil {
+		grpcPort = p + 1
+	}
+
+	host := e.resolveSSHost(hostHint)
+	allowedPorts := e.getAllowedPortsCSV()
+
+	return fmt.Sprintf(`{
+  "dns": {"servers": ["1.1.1.1", "8.8.8.8"]},
+  "inbounds": [{"listen": "127.0.0.1", "port": 10808, "protocol": "socks", "settings": {"auth": "noauth", "udp": true}, "sniffing": {"destOverride": ["http", "tls"], "enabled": true}, "tag": "socks"}],
+  "log": {"loglevel": "warning"},
+  "outbounds": [
+    {"protocol": "shadowsocks", "settings": {"servers": [{"address": "%s", "port": %d, "method": "%s", "password": "%s"}]}, "streamSettings": {"network": "grpc", "security": "tls", "tlsSettings": {"allowInsecure": true, "serverName": "%s"}, "grpcSettings": {"serviceName": "GunService"}}, "tag": "proxy"},
+    {"protocol": "freedom", "tag": "direct"},
+    {"protocol": "blackhole", "tag": "block"}
+  ],
+  "remarks": "%s (gRPC)",
+  "routing": {"domainStrategy": "IPIfNonMatch", "rules": [
+    {"outboundTag": "proxy", "port": "%s", "type": "field"},
+    {"outboundTag": "block", "port": "0-65535", "type": "field"}
+  ]}
+}`, host, grpcPort, cipher, password, host, host, allowedPorts)
+}
+
+// resolveSSHost determines the public host for SS URLs.
+// buildSSPortRouting creates Xray routing config that restricts traffic
+// to the same ports as e.ssAllowedPorts (used by the raw TCP SS handler).
+// Allowed ports → "allow" outbound, everything else → "block" outbound.
+func (e *Endpoint) buildSSPortRouting() *router.Config {
+	// Build port ranges from ssAllowedPorts
+	var portRanges []*xnet.PortRange
+	for portStr := range e.ssAllowedPorts {
+		if p, err := strconv.ParseUint(portStr, 10, 32); err == nil {
+			portRanges = append(portRanges, xnet.SinglePortRange(xnet.Port(p)))
+		}
+	}
+
+	return &router.Config{
+		Rule: []*router.RoutingRule{
+			{
+				// Allow only specific ports
+				PortList: &xnet.PortList{Range: portRanges},
+				TargetTag: &router.RoutingRule_Tag{
+					Tag: "allow",
+				},
+			},
+			{
+				// Block everything else (catch-all: all ports)
+				PortList: &xnet.PortList{Range: []*xnet.PortRange{{
+					From: 0,
+					To:   65535,
+				}}},
+				TargetTag: &router.RoutingRule_Tag{
+					Tag: "block",
+				},
+			},
+		},
+	}
+}
+
+func (e *Endpoint) resolveSSHost(hostHint string) string {
+	host, _, _ := net.SplitHostPort(e.ssAddr)
+	if host == "" || host == "0.0.0.0" {
+		host = hostHint
+		if host == "" {
+			host = strings.Trim(e.mailDomain, "[]")
+		} else {
+			if h, _, err := net.SplitHostPort(host); err == nil {
+				host = h
+			}
+		}
+	}
+	return host
 }
 
 func (e *Endpoint) serveALPNMultiplexed(l net.Listener) {
@@ -1581,6 +2203,9 @@ func (e *Endpoint) setupAdminAPI() {
 	handler.Register("/admin/services/turn", resources.TurnHandler(settingsDeps))
 	handler.Register("/admin/services/iroh", resources.IrohHandler(settingsDeps))
 	handler.Register("/admin/services/shadowsocks", resources.ShadowsocksHandler(settingsDeps))
+	handler.Register("/admin/services/ss_ws", resources.SsWsHandler(settingsDeps))
+	handler.Register("/admin/services/ss_grpc", resources.SsGrpcHandler(settingsDeps))
+	handler.Register("/admin/services/http_proxy", resources.HTTPProxyHandler(settingsDeps))
 	handler.Register("/admin/services/log", resources.LogHandler(settingsDeps))
 
 	// Bulk settings endpoint
@@ -1594,6 +2219,8 @@ func (e *Endpoint) setupAdminAPI() {
 	handler.Register("/admin/settings/sasl_port", resources.GenericSettingHandler(resources.KeySaslPort, settingsDeps))
 	handler.Register("/admin/settings/iroh_port", resources.GenericSettingHandler(resources.KeyIrohPort, settingsDeps))
 	handler.Register("/admin/settings/ss_port", resources.GenericSettingHandler(resources.KeySsPort, settingsDeps))
+	handler.Register("/admin/settings/ss_ws_port", resources.GenericSettingHandler(resources.KeySsWsPort, settingsDeps))
+	handler.Register("/admin/settings/ss_grpc_port", resources.GenericSettingHandler(resources.KeySsGrpcPort, settingsDeps))
 
 	// Per-port access control (local-only toggles)
 	handler.Register("/admin/settings/smtp_local_only", resources.GenericSettingHandler(resources.KeySMTPLocalOnly, settingsDeps))
@@ -1615,6 +2242,10 @@ func (e *Endpoint) setupAdminAPI() {
 	handler.Register("/admin/settings/ss_password", resources.GenericSettingHandler(resources.KeySsPassword, settingsDeps))
 	handler.Register("/admin/settings/http_port", resources.GenericSettingHandler(resources.KeyHTTPPort, settingsDeps))
 	handler.Register("/admin/settings/https_port", resources.GenericSettingHandler(resources.KeyHTTPSPort, settingsDeps))
+	handler.Register("/admin/settings/http_proxy_port", resources.GenericSettingHandler(resources.KeyHTTPProxyPort, settingsDeps))
+	handler.Register("/admin/settings/http_proxy_path", resources.GenericSettingHandler(resources.KeyHTTPProxyPath, settingsDeps))
+	handler.Register("/admin/settings/http_proxy_username", resources.GenericSettingHandler(resources.KeyHTTPProxyUsername, settingsDeps))
+	handler.Register("/admin/settings/http_proxy_password", resources.GenericSettingHandler(resources.KeyHTTPProxyPassword, settingsDeps))
 	handler.Register("/admin/settings/admin_path", resources.GenericSettingHandler(resources.KeyAdminPath, settingsDeps))
 	handler.Register("/admin/settings/admin_web_path", resources.GenericSettingHandler(resources.KeyAdminWebPath, settingsDeps))
 	handler.Register("/admin/services/admin_web", resources.AdminWebHandler(settingsDeps))
