@@ -16,10 +16,7 @@ formatters:
   exclusions:
     paths:
       - cmd/maddy-pam-helper
-    rules:
-      - path: _test.go
-        linters:
-          - gofmt
+      - _test.go
 
 run:
   timeout: 5m
