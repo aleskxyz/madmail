@@ -1,6 +1,19 @@
 # [0.28.0](https://github.com/themadorg/madmail/compare/v0.27.1...v0.28.0) (2026-03-17)
 
 
+### Bug Fixes
+
+* **ci:** upgrade golangci-lint-action to v7 for v2.x support ([5e36504](https://github.com/themadorg/madmail/commit/5e3650444406558ddec1c49fc8424b566d5ec18d))
+
+
+### Features
+
+* **dev:** add pprof profiling toolchain ([405dc70](https://github.com/themadorg/madmail/commit/405dc701a7d0e3372ec48f639752dec98122cc01))
+* **quota:** add in-memory quota cache with RWMutex protection ([c0c0747](https://github.com/themadorg/madmail/commit/c0c07474bf5b016ab211bb27ace848228c095a55))
+
+# [0.28.0](https://github.com/themadorg/madmail/compare/v0.27.1...v0.28.0) (2026-03-17)
+
+
 ### Features
 
 * **dev:** add pprof profiling toolchain ([405dc70](https://github.com/themadorg/madmail/commit/405dc701a7d0e3372ec48f639752dec98122cc01))
