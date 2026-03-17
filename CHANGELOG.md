@@ -1,3 +1,10 @@
+# [0.28.0](https://github.com/themadorg/madmail/compare/v0.27.1...v0.28.0) (2026-03-17)
+
+
+### Features
+
+* **dev:** add pprof profiling toolchain ([405dc70](https://github.com/themadorg/madmail/commit/405dc701a7d0e3372ec48f639752dec98122cc01))
+
 ## [0.27.1](https://github.com/themadorg/madmail/compare/v0.27.0...v0.27.1) (2026-03-17)
 
 
