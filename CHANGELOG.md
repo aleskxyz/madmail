@@ -1,3 +1,10 @@
+## [0.27.1](https://github.com/themadorg/madmail/compare/v0.27.0...v0.27.1) (2026-03-17)
+
+
+### Bug Fixes
+
+* **ci:** upgrade golangci-lint to v2.9.0 for Go 1.25.7 support ([d530e36](https://github.com/themadorg/madmail/commit/d530e362346586fa9137d1404759dbd41427a966))
+
 # [0.27.0](https://github.com/themadorg/madmail/compare/v0.26.0...v0.27.0) (2026-03-16)
 
 
