@@ -132,14 +132,15 @@ Reset to default (remove from DB):
 
 ### `quota`
 
-Per-user storage quota limits.
+Per-user storage quota limits. See [quota.md](quota.md) for full documentation.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `username` | string (PK) | User identifier, or `__GLOBAL_DEFAULT__` for the default |
 | `max_storage` | int64 | Maximum storage in bytes |
-| `created_at` | timestamp | When the quota was set |
-| `first_login_at` | timestamp | First login time for the user |
+| `created_at` | int64 | When the quota was set |
+| `first_login_at` | int64 | First login time for the user |
+| `last_login_at` | int64 | Most recent login time |
 
 ### `dns_overrides`
 

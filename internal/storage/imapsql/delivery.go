@@ -43,6 +43,7 @@ type delivery struct {
 	mailFrom string
 
 	addedRcpts map[string]addedRcpt
+	bodyLen    int64 // captured from buffer.Len() for quota cache update
 }
 
 func (d *delivery) String() string {
@@ -114,6 +115,9 @@ func (d *delivery) AddRcpt(ctx context.Context, rcptTo string, _ smtp.RcptOption
 func (d *delivery) Body(ctx context.Context, header textproto.Header, body buffer.Buffer) error {
 	defer trace.StartRegion(ctx, "sql/Body").End()
 
+	// Capture body length for cache update after successful commit.
+	d.bodyLen = int64(body.Len())
+
 	// Quota check
 	for rcpt := range d.addedRcpts {
 		used, max, _, err := d.store.GetQuota(rcpt)
@@ -182,7 +186,19 @@ func (d *delivery) Abort(ctx context.Context) error {
 func (d *delivery) Commit(ctx context.Context) error {
 	defer trace.StartRegion(ctx, "sql/Commit").End()
 
-	return d.d.Commit()
+	if err := d.d.Commit(); err != nil {
+		return err
+	}
+
+	// Update the quota cache after successful delivery so used bytes
+	// stay accurate without an extra DB round-trip.
+	if d.store.QuotaCache != nil && d.bodyLen > 0 {
+		for rcpt := range d.addedRcpts {
+			d.store.QuotaCache.AddUsed(rcpt, d.bodyLen)
+		}
+	}
+
+	return nil
 }
 
 func (store *Storage) Start(ctx context.Context, msgMeta *module.MsgMetadata, mailFrom string) (module.Delivery, error) {

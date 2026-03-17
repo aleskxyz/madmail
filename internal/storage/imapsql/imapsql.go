@@ -50,6 +50,7 @@ import (
 	"github.com/themadorg/madmail/framework/log"
 	"github.com/themadorg/madmail/framework/module"
 	"github.com/themadorg/madmail/internal/authz"
+	"github.com/themadorg/madmail/internal/quota"
 	"github.com/themadorg/madmail/internal/updatepipe"
 	"github.com/themadorg/madmail/internal/updatepipe/pubsub"
 
@@ -93,6 +94,10 @@ type Storage struct {
 	autoCreate   bool
 
 	settingsTable module.Table
+
+	// QuotaCache is the in-memory quota cache for fast per-user lookups.
+	// Exported so the IMAP endpoint, admin API, and CLI can access it.
+	QuotaCache *quota.Cache
 }
 
 func (store *Storage) Name() string {
@@ -399,9 +404,56 @@ func (store *Storage) initQuotaTable() error {
 		module.SetReceivedMessages(stat.Count)
 	}
 
+	// Initialize the in-memory quota cache.
+	store.QuotaCache = quota.New(store.Log)
+	if err := store.populateQuotaCache(); err != nil {
+		store.Log.Error("failed to populate quota cache, will use DB fallback", err)
+	}
+
 	// Background goroutine to flush counters to DB every 30s.
 	go store.flushMessageCounters()
 
+	return nil
+}
+
+// populateQuotaCache bulk-loads per-user storage usage and quota limits
+// into the in-memory cache. Called once at startup.
+func (store *Storage) populateQuotaCache() error {
+	// Step 1: Get ALL registered accounts so every user has a cache entry.
+	// This ensures users with 0 messages also get the default quota cached.
+	allUsers, err := store.ListIMAPAccts()
+	if err != nil {
+		return fmt.Errorf("failed to list accounts: %w", err)
+	}
+	usedMap := make(map[string]int64, len(allUsers))
+	for _, user := range allUsers {
+		usedMap[user] = 0 // baseline; will be overwritten below if they have messages
+	}
+
+	// Step 2: Get per-user storage usage (SUM of message body lengths by UID).
+	actualUsage, err := store.GetAllUsedStorage()
+	if err != nil {
+		return fmt.Errorf("failed to get used storage: %w", err)
+	}
+	for user, used := range actualUsage {
+		usedMap[user] = used
+	}
+
+	// Step 3: Get per-user max quotas from the quotas table.
+	var quotas []mdb.Quota
+	if err := store.GORMDB.Where("username != ?", "__GLOBAL_DEFAULT__").Find(&quotas).Error; err != nil {
+		return fmt.Errorf("failed to get user quotas: %w", err)
+	}
+	quotaMap := make(map[string]int64, len(quotas))
+	for _, q := range quotas {
+		quotaMap[q.Username] = q.MaxStorage
+	}
+
+	// Step 4: Get the effective default quota.
+	defaultQuota := store.GetDefaultQuota()
+
+	// Step 5: Load everything into the cache.
+	store.QuotaCache.Load(usedMap, quotaMap, defaultQuota)
 	return nil
 }
 
@@ -422,8 +474,16 @@ func (store *Storage) flushMessageCounters() {
 }
 
 func (store *Storage) GetQuota(username string) (used, max int64, isDefault bool, err error) {
-	// Get current usage
-	// We'll use GORM here too for driver transparency
+	// Try the in-memory cache first for fast lookup.
+	if store.QuotaCache != nil {
+		entry, miss := store.QuotaCache.Get(username)
+		if !miss {
+			return entry.UsedBytes, entry.MaxBytes, entry.IsDefault, nil
+		}
+		// Cache miss — fall through to DB and populate cache.
+	}
+
+	// DB fallback: get current usage.
 	var result struct {
 		TotalUsed int64
 	}
@@ -441,10 +501,15 @@ func (store *Storage) GetQuota(username string) (used, max int64, isDefault bool
 	}
 
 	// Get max storage
-	var quota mdb.Quota
-	err = store.GORMDB.Where("username = ?", username).First(&quota).Error
+	var q mdb.Quota
+	err = store.GORMDB.Where("username = ?", username).First(&q).Error
 	if err == nil {
-		return used, quota.MaxStorage, false, nil
+		// Populate cache on miss.
+		if store.QuotaCache != nil {
+			store.QuotaCache.SetMax(username, q.MaxStorage)
+			store.QuotaCache.UpdateUsed(username, used)
+		}
+		return used, q.MaxStorage, false, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return 0, 0, false, err
@@ -454,9 +519,17 @@ func (store *Storage) GetQuota(username string) (used, max int64, isDefault bool
 	var globalDef mdb.Quota
 	err = store.GORMDB.Where("username = ?", "__GLOBAL_DEFAULT__").First(&globalDef).Error
 	if err == nil {
+		// Populate cache with default.
+		if store.QuotaCache != nil {
+			store.QuotaCache.UpdateUsed(username, used)
+		}
 		return used, globalDef.MaxStorage, true, nil
 	}
 
+	// Populate cache with config default.
+	if store.QuotaCache != nil {
+		store.QuotaCache.UpdateUsed(username, used)
+	}
 	return used, store.defaultQuota, true, nil
 }
 
@@ -470,28 +543,36 @@ func (store *Storage) GetDefaultQuota() int64 {
 }
 
 func (store *Storage) SetDefaultQuota(max int64) error {
-	return store.GORMDB.Save(&mdb.Quota{Username: "__GLOBAL_DEFAULT__", MaxStorage: max}).Error
+	err := store.GORMDB.Save(&mdb.Quota{Username: "__GLOBAL_DEFAULT__", MaxStorage: max}).Error
+	if err == nil && store.QuotaCache != nil {
+		store.QuotaCache.SetDefaultQuota(max)
+	}
+	return err
 }
 
 func (store *Storage) SetQuota(username string, max int64) error {
-	var quota mdb.Quota
-	err := store.GORMDB.Where("username = ?", username).First(&quota).Error
+	var q mdb.Quota
+	err := store.GORMDB.Where("username = ?", username).First(&q).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		quota = mdb.Quota{
+		q = mdb.Quota{
 			Username:     username,
 			MaxStorage:   max,
 			CreatedAt:    time.Now().Unix(),
 			FirstLoginAt: 1,
 		}
 	} else {
-		quota.MaxStorage = max
+		q.MaxStorage = max
 	}
 
-	return store.GORMDB.Save(&quota).Error
+	err = store.GORMDB.Save(&q).Error
+	if err == nil && store.QuotaCache != nil {
+		store.QuotaCache.SetMax(username, max)
+	}
+	return err
 }
 
 // BlockUser adds a username to the blocklist, preventing re-registration.
@@ -544,7 +625,12 @@ func (store *Storage) DeleteAccount(username, reason string) error {
 	// Step 2: Delete quota record
 	store.GORMDB.Where("username = ?", username).Delete(&mdb.Quota{})
 
-	// Step 3: Block the username
+	// Step 3: Invalidate cache entry
+	if store.QuotaCache != nil {
+		store.QuotaCache.Invalidate(username)
+	}
+
+	// Step 4: Block the username
 	if reason == "" {
 		reason = "account deleted"
 	}
@@ -556,7 +642,11 @@ func (store *Storage) DeleteAccount(username, reason string) error {
 }
 
 func (store *Storage) ResetQuota(username string) error {
-	return store.GORMDB.Model(&mdb.Quota{}).Where("username = ?", username).Update("max_storage", nil).Error
+	err := store.GORMDB.Model(&mdb.Quota{}).Where("username = ?", username).Update("max_storage", nil).Error
+	if err == nil && store.QuotaCache != nil {
+		store.QuotaCache.ResetMax(username)
+	}
+	return err
 }
 
 func (store *Storage) GetAccountDate(username string) (created int64, err error) {
